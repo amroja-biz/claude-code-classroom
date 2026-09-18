@@ -1,0 +1,51 @@
+# Copy to workshop.conf and edit. workshop.conf is gitignored.
+#
+#   cp workshop.conf.example workshop.conf
+
+# Hostname students visit.
+LAB_DOMAIN=labs.example.com
+
+# The Route53 hosted zone that LAB_DOMAIN sits under, in THIS account -- e.g.
+# the zone for example.com when LAB_DOMAIN is labs.example.com. This is the
+# normal case: you already own the domain here, and the stack just adds an A
+# record to it.
+#
+# Leave empty only if you want a SEPARATE zone for the subdomain. The stack then
+# creates one and you must delegate to it with NS records in the parent zone --
+# which is what you need when the parent lives in a different AWS account.
+LAB_HOSTED_ZONE_ID=
+
+# AWS profile and region used for every call.
+LAB_AWS_PROFILE=default
+LAB_AWS_REGION=us-east-1
+
+# VPC for the workshop security group. Instances launch into a public subnet in
+# this VPC. Leave LAB_SUBNET_ID empty to auto-select one.
+LAB_VPC_ID=
+LAB_SUBNET_ID=
+
+# SSH public key installed on the workshop instance.
+LAB_SSH_PUBLIC_KEY=~/.ssh/id_ed25519.pub
+
+# CloudFormation stack and resource tag. Change both to run more than one
+# independent lab in the same account.
+LAB_STACK=ai-agents-lab-durable
+LAB_TAG=ai-agents-lab
+
+# Where curricula are read from. Point this at a private directory or repo to
+# keep course content out of this repository.
+LAB_CURRICULA_DIR=./curricula
+
+# Anthropic API key. Prefer a dedicated key with a spend limit -- see README.
+#
+# Recommended: an SSM Parameter Store SecureString. The instance fetches it
+# under its own IAM role, so the key never sits on your machine.
+#   aws ssm put-parameter --name /ai-agents-lab/anthropic-api-key \
+#       --type SecureString --value 'sk-ant-...'
+LAB_SSM_PARAM=
+
+# Fallbacks, used only when LAB_SSM_PARAM is empty. LAB_API_KEY_CMD is a command
+# that PRINTS the key; the key itself never belongs in this file. With both
+# empty, $ANTHROPIC_API_KEY is read from the environment, then the macOS
+# keychain entry of the same name.
+LAB_API_KEY_CMD=

@@ -1,0 +1,187 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Durable infrastructure for the AI Agents lab. These resources persist between
+  workshops and cost roughly $0.50/month (the hosted zone; everything else is
+  free). The EC2 instance itself is deliberately NOT here -- it is created and
+  destroyed by scripts/workshop, because "exists on workshop days" is not a
+  state a declarative IaC tool converges to, and modelling it here is what forces
+  awkward prevent_destroy-style guards.
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: >
+      Subdomain this lab serves from, e.g. labs.example.com. This stack creates
+      the hosted zone; delegate the subdomain to it by adding the NS records
+      this stack outputs to the parent zone. That delegation is a one-time
+      manual step, and the parent zone may live in a different account.
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the workshop security group (the default VPC is fine).
+
+  SshCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to reach SSH. Tighten before sharing a URL.
+
+  WebCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to reach 80/443. Students need this open.
+
+  SshPublicKey:
+    Type: String
+    Description: SSH public key material installed on the workshop instance.
+
+  ExistingHostedZoneId:
+    Type: String
+    Default: ""
+    Description: >
+      The common case: the Route53 hosted zone you already own, in THIS account,
+      that DomainName sits under (e.g. the zone for example.com when DomainName
+      is labs.example.com). The stack adds records to it and creates no zone.
+      Leave empty only if you want a separate zone for the subdomain, which then
+      has to be delegated from the parent -- see README.
+
+  SsmParameterName:
+    Type: String
+    Default: ""
+    Description: >
+      Optional. SSM Parameter Store path holding the Anthropic API key as a
+      SecureString, e.g. /ai-agents-lab/anthropic-api-key. When set, the
+      instance fetches the key itself and it never leaves AWS. Leave empty to
+      supply the key from the operator's machine instead.
+
+Conditions:
+  HasSsmParameter: !Not [!Equals [!Ref SsmParameterName, ""]]
+  # Only create a zone when the operator has not supplied one. Creating a zone
+  # is the cross-account / delegated-subdomain path, not the default.
+  CreateZone: !Equals [!Ref ExistingHostedZoneId, ""]
+
+Resources:
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Condition: CreateZone
+    Properties:
+      Name: !Ref DomainName
+      HostedZoneConfig:
+        Comment: !Sub "AI Agents lab - ${DomainName}"
+
+  KeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: ai-agents-lab
+      PublicKeyMaterial: !Ref SshPublicKey
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: AI Agents lab workshop instance
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        # Caddy serves 443; 80 is required for the Let's Encrypt HTTP-01
+        # challenge and to redirect students who omit the scheme.
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref WebCidr
+          Description: http (ACME HTTP-01 challenge + redirect)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref WebCidr
+          Description: https (Caddy reverse proxy to JupyterHub)
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SshCidr
+          Description: ssh
+      # Port 8000 is deliberately absent. JupyterHub binds 0.0.0.0:8000 inside
+      # its container; this security group is what keeps it off the internet.
+      Tags:
+        - Key: Name
+          Value: ai-agents-lab
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Session Manager: a shell on the box without opening SSH or holding a
+        # key, which matters when the instance is rebuilt for every workshop.
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        # Read the workshop API key from Parameter Store. Standard-tier
+        # SecureString parameters are free; Secrets Manager charges per secret
+        # per month for rotation machinery this key cannot use.
+        - !If
+          - HasSsmParameter
+          - PolicyName: read-api-key
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: ssm:GetParameter
+                  Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmParameterName}"
+                # Required to decrypt a SecureString. Scoped by kms:ViaService so
+                # the role can only use KMS through Parameter Store.
+                - Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: "*"
+                  Condition:
+                    StringEquals:
+                      kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
+          - !Ref AWS::NoValue
+        - PolicyName: route53-self-update
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: route53:ChangeResourceRecordSets
+                Resource: !Sub
+                  - "arn:aws:route53:::hostedzone/${ZoneId}"
+                  - ZoneId: !If [CreateZone, !Ref HostedZone, !Ref ExistingHostedZoneId]
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref InstanceRole
+
+Outputs:
+  HostedZoneId:
+    Description: Zone the workshop A record is written to.
+    Value: !If [CreateZone, !Ref HostedZone, !Ref ExistingHostedZoneId]
+    Export:
+      Name: ai-agents-lab-zone-id
+  NameServers:
+    Condition: CreateZone
+    Description: >
+      Only when this stack created a zone. Add these as NS records for the
+      subdomain in the parent zone to delegate it. Not needed when you supplied
+      ExistingHostedZoneId.
+    Value: !Join [",", !GetAtt HostedZone.NameServers]
+  DomainName:
+    Value: !Ref DomainName
+    Export:
+      Name: ai-agents-lab-domain
+  SecurityGroupId:
+    Value: !Ref SecurityGroup
+    Export:
+      Name: ai-agents-lab-sg
+  InstanceProfileName:
+    Value: !Ref InstanceProfile
+    Export:
+      Name: ai-agents-lab-instance-profile
+  KeyPairName:
+    Value: !Ref KeyPair
+    Export:
+      Name: ai-agents-lab-keypair

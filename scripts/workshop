@@ -1,0 +1,442 @@
+#!/usr/bin/env bash
+# Workshop lifecycle.
+#
+#   workshop build                                         bake the AMI (day before)
+#   workshop size  --students N [--mem 2] [--hours 6]      what it would cost
+#   workshop up    --students N --curriculum NAME [--staging]  prints URL + codes
+#   workshop down                                          terminate everything
+#   workshop status                                        what exists, what it costs
+#
+# There is no default cohort size. Instance type is derived from --students; see
+# scripts/lib-size.sh.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+. scripts/lib-size.sh
+
+# Deployment config. Everything account-specific lives in workshop.conf, which
+# is gitignored; workshop.conf.example is the template.
+CONF="${LAB_CONF:-workshop.conf}"
+if [ -f "$CONF" ]; then
+    # shellcheck disable=SC1090
+    . "$CONF"
+elif [ -f workshop.conf.example ]; then
+    echo "error: $CONF not found. Copy it and edit:" >&2
+    echo "    cp workshop.conf.example workshop.conf" >&2
+    exit 1
+fi
+
+STACK="${LAB_STACK:-ai-agents-lab-durable}"
+TAG_NAME="${LAB_TAG:-ai-agents-lab}"
+CURRICULA_DIR="${LAB_CURRICULA_DIR:-./curricula}"
+AWS_PROFILE="${AWS_PROFILE:-${LAB_AWS_PROFILE:-default}}"
+export AWS_PROFILE
+AWS_REGION="${AWS_REGION:-${LAB_AWS_REGION:-us-east-1}}"
+export AWS_REGION
+
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10"
+
+die() { echo "error: $*" >&2; exit 1; }
+note() { echo "==> $*"; }
+
+stack_output() {
+    aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null
+}
+
+# run-instances without a subnet silently depends on a default VPC existing and
+# the security group living in it. Neither holds in a locked-down account, so
+# resolve a public subnet in the security group's own VPC.
+resolve_subnet() {
+    if [ -n "${LAB_SUBNET_ID:-}" ]; then echo "$LAB_SUBNET_ID"; return; fi
+    local vpc sub
+    vpc="$(aws ec2 describe-security-groups --group-ids "$1" \
+           --query 'SecurityGroups[0].VpcId' --output text 2>/dev/null)"
+    sub="$(aws ec2 describe-subnets \
+           --filters "Name=vpc-id,Values=$vpc" "Name=map-public-ip-on-launch,Values=true" \
+           --query 'Subnets[0].SubnetId' --output text 2>/dev/null)"
+    [ -n "$sub" ] && [ "$sub" != "None" ] \
+        || die "no public subnet found in $vpc; set LAB_SUBNET_ID in $CONF"
+    echo "$sub"
+}
+
+running_instance() {
+    aws ec2 describe-instances \
+        --filters "Name=tag:Name,Values=$TAG_NAME" \
+                  "Name=instance-state-name,Values=pending,running" \
+        --query 'Reservations[].Instances[0].InstanceId' --output text 2>/dev/null | tr -d '\t'
+}
+
+# Codes are read off a printed handout and typed by hand, so they are
+# word-pairs plus a number rather than random characters: easy to read aloud,
+# hard to mistype, and no case or l/1/O/0 confusion. ~15k combinations, which is
+# ample for a single cohort and is not trying to be a secret.
+gen_code() {
+    local a=(amber azure bronze coral cyan indigo jade lime onyx pearl rust teal violet)
+    local b=(otter marmot heron falcon badger lynx raven shrew tapir vole wombat yak)
+    printf '%s-%s-%02d' "${a[RANDOM % ${#a[@]}]}" "${b[RANDOM % ${#b[@]}]}" "$((RANDOM % 100))"
+}
+
+# ---------------------------------------------------------------------------
+
+STUDENTS="" ; MEM_PER=2 ; HOURS=6 ; CURRICULUM="" ; INSTANCE_TYPE="" ; STAGING=""
+SUB="${1:-help}" ; shift || true
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --students)      STUDENTS="$2"; shift 2 ;;
+        --mem)           MEM_PER="$2"; shift 2 ;;
+        --hours)         HOURS="$2"; shift 2 ;;
+        --curriculum)    CURRICULUM="$2"; shift 2 ;;
+        --instance-type) INSTANCE_TYPE="$2"; shift 2 ;;
+        --staging)       STAGING=1; shift ;;
+        *) die "unknown option: $1" ;;
+    esac
+done
+
+require_students() {
+    [ -n "$STUDENTS" ] || die "--students is required (there is no default cohort size)"
+    [[ "$STUDENTS" =~ ^[0-9]+$ ]] && [ "$STUDENTS" -gt 0 ] || die "--students must be a positive integer"
+}
+
+case "$SUB" in
+
+size)
+    require_students
+    echo
+    lab_size_report "$STUDENTS" "$MEM_PER" "$HOURS"
+    echo
+    ;;
+
+build)
+    # Bake the AMI. Slow and network-dependent on purpose -- run it the day
+    # before, so a broken upstream is discovered with a day of slack rather than
+    # thirty minutes before students arrive.
+    DOMAIN="$(stack_output DomainName)"
+    SG="$(stack_output SecurityGroupId)"
+    KEY="$(stack_output KeyPairName)"
+    [ -n "$DOMAIN" ] || die "durable stack '$STACK' not found; deploy infra/durable.yaml first"
+
+    UBUNTU="$(aws ec2 describe-images --owners 099720109477 \
+        --filters 'Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*' \
+                  'Name=state,Values=available' \
+        --query 'reverse(sort_by(Images,&CreationDate))[0].ImageId' --output text)"
+    note "base image: $UBUNTU"
+
+    # Build on a bigger box than the workshop needs: this is CPU/network bound
+    # and only runs for a few minutes, so paying for speed here is free in
+    # practice.
+    BUILD_TYPE="${INSTANCE_TYPE:-r7i.xlarge}"
+    note "launching build instance ($BUILD_TYPE)"
+    BID="$(aws ec2 run-instances \
+        --image-id "$UBUNTU" --instance-type "$BUILD_TYPE" \
+        --key-name "$KEY" --security-group-ids "$SG" --subnet-id "$(resolve_subnet "$SG")" \
+        --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=${LAB_DISK_MIN_GIB},VolumeType=gp3,Encrypted=true,DeleteOnTermination=true}" \
+        --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${TAG_NAME}-build}]" \
+        --query 'Instances[0].InstanceId' --output text)"
+
+    cleanup_build() {
+        note "cleaning up build instance $BID"
+        aws ec2 terminate-instances --instance-ids "$BID" >/dev/null 2>&1 || true
+    }
+    trap cleanup_build EXIT
+
+    aws ec2 wait instance-running --instance-ids "$BID"
+    BIP="$(aws ec2 describe-instances --instance-ids "$BID" \
+           --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)"
+    note "build instance $BID at $BIP; waiting for ssh"
+    for _ in $(seq 1 60); do
+        ssh $SSH_OPTS "ubuntu@$BIP" true 2>/dev/null && break
+        sleep 5
+    done
+    ssh $SSH_OPTS "ubuntu@$BIP" true 2>/dev/null || die "ssh to $BIP never came up"
+
+    note "uploading lab sources"
+    TARBALL="$(mktemp -t lab).tar.gz"
+    # COPYFILE_DISABLE stops macOS tar from embedding ._* AppleDouble resource
+    # forks, which GNU tar on the box then warns about for every single file.
+    # Curricula may live outside this repo (LAB_CURRICULA_DIR), so stage them
+    # under the name the image expects rather than assuming ./curricula.
+    STAGE="$(mktemp -d)"
+    cp -r hub student-image docker-compose.yml "$STAGE"/
+    mkdir -p "$STAGE/scripts" && cp scripts/provision.sh "$STAGE/scripts"/
+    [ -d "$CURRICULA_DIR" ] || die "curricula directory not found: $CURRICULA_DIR"
+    cp -r "$CURRICULA_DIR" "$STAGE/curricula"
+    rm -f "$STAGE/hub/codes.json"
+    COPYFILE_DISABLE=1 tar czf "$TARBALL" -C "$STAGE" \
+        hub student-image curricula docker-compose.yml scripts
+    scp $SSH_OPTS -q "$TARBALL" "ubuntu@$BIP:/tmp/lab.tar.gz"
+    rm -f "$TARBALL"
+    find "$STAGE" -depth -delete 2>/dev/null || true
+
+    note "provisioning (docker, caddy, image builds) -- several minutes"
+    ssh $SSH_OPTS "ubuntu@$BIP" \
+        "sudo mkdir -p /opt/lab && sudo tar xzf /tmp/lab.tar.gz -C /opt/lab && \
+         sudo bash /opt/lab/scripts/provision.sh '$DOMAIN' 2>&1 | tail -40"
+
+    note "stopping instance for a clean image"
+    aws ec2 stop-instances --instance-ids "$BID" >/dev/null
+    aws ec2 wait instance-stopped --instance-ids "$BID"
+
+    STAMP="$(date -u +%Y%m%d-%H%M%S)"
+    note "creating AMI"
+    AMI_NEW="$(aws ec2 create-image --instance-id "$BID" --name "${TAG_NAME}-${STAMP}" \
+        --description "AI Agents lab $STAMP" \
+        --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=$TAG_NAME}]" \
+        --query 'ImageId' --output text)"
+
+    # From here on, DO NOT let the EXIT trap terminate the instance. `aws ec2
+    # wait image-available` gives up after 40 attempts x 15s = 10 minutes, which
+    # a first snapshot can exceed; the trap then fired and terminated the
+    # instance while its snapshot was still running. That happened to survive
+    # (AWS keeps the snapshot going after termination) but it is not a race
+    # worth running -- a half-made AMI is worse than a slow one.
+    trap - EXIT
+
+    note "waiting for snapshot (first build can take 15-30 min)"
+    AMI_STATE=pending
+    for _ in $(seq 1 180); do            # up to 60 minutes
+        AMI_STATE="$(aws ec2 describe-images --image-ids "$AMI_NEW" \
+                     --query 'Images[0].State' --output text 2>/dev/null || echo pending)"
+        [ "$AMI_STATE" = "available" ] && break
+        if [ "$AMI_STATE" = "failed" ] || [ "$AMI_STATE" = "invalid" ]; then
+            die "AMI $AMI_NEW entered state '$AMI_STATE'; build instance $BID left running for inspection"
+        fi
+        PROG="$(aws ec2 describe-snapshots --owner-ids self \
+                --filters "Name=description,Values=*${AMI_NEW}*" \
+                --query 'Snapshots[0].Progress' --output text 2>/dev/null || true)"
+        note "  ${AMI_STATE}${PROG:+ ($PROG)}"
+        sleep 20
+    done
+    [ "$AMI_STATE" = "available" ] \
+        || die "AMI $AMI_NEW still '$AMI_STATE' after 60 min; instance $BID left running for inspection"
+
+    note "AMI ready: $AMI_NEW"
+    cleanup_build
+
+    # Prune. Deregistering an image does NOT delete its backing snapshot, which
+    # then bills forever -- the single most common way this design's ~$1/month
+    # idle cost quietly becomes $5.
+    note "pruning old AMIs (keeping 2)"
+    OLD="$(aws ec2 describe-images --owners self --filters "Name=tag:Name,Values=$TAG_NAME" \
+           --query 'reverse(sort_by(Images,&CreationDate))[2:].ImageId' --output text)"
+    for img in $OLD; do
+        [ -z "$img" ] && continue
+        SNAPS="$(aws ec2 describe-images --image-ids "$img" \
+                 --query 'Images[0].BlockDeviceMappings[].Ebs.SnapshotId' --output text)"
+        aws ec2 deregister-image --image-id "$img" >/dev/null 2>&1 || true
+        for snap in $SNAPS; do
+            [ "$snap" = "None" ] && continue
+            aws ec2 delete-snapshot --snapshot-id "$snap" >/dev/null 2>&1 || true
+            note "  deleted $img and snapshot $snap"
+        done
+    done
+    note "build complete"
+    ;;
+
+up)
+    require_students
+    [ -n "$CURRICULUM" ] || die "--curriculum is required (see: make curricula)"
+
+    if [ -n "$INSTANCE_TYPE" ]; then
+        note "instance type overridden: $INSTANCE_TYPE"
+    else
+        read -r INSTANCE_TYPE _ _ _ <<<"$(lab_pick_instance "$STUDENTS" "$MEM_PER")"
+        note "derived instance type for $STUDENTS students: $INSTANCE_TYPE"
+    fi
+
+    [ -z "$(running_instance)" ] || die "a workshop instance is already running; 'workshop down' first"
+
+    AMI="$(aws ec2 describe-images --owners self \
+            --filters "Name=tag:Name,Values=$TAG_NAME" "Name=state,Values=available" \
+            --query 'reverse(sort_by(Images,&CreationDate))[0].ImageId' --output text 2>/dev/null)"
+    [ -n "$AMI" ] && [ "$AMI" != "None" ] \
+        || die "no workshop AMI found. Run 'workshop build' first (not yet implemented)."
+
+    DOMAIN="$(stack_output DomainName)"
+    ZONE="$(stack_output HostedZoneId)"
+    SG="$(stack_output SecurityGroupId)"
+    PROFILE_NAME="$(stack_output InstanceProfileName)"
+    KEY="$(stack_output KeyPairName)"
+    [ -n "$DOMAIN" ] || die "durable stack '$STACK' not found; deploy infra/durable.yaml first"
+
+    # When LAB_SSM_PARAM is set the instance fetches the key itself under its
+    # IAM role, so it never exists on this machine and never crosses the ssh
+    # session. Otherwise fall back to resolving it locally.
+    if [ -n "${LAB_SSM_PARAM:-}" ]; then
+        LAB_API_KEY=""
+        aws ssm get-parameter --name "$LAB_SSM_PARAM" --with-decryption \
+            --query Parameter.Value --output text >/dev/null 2>&1 \
+            || die "cannot read $LAB_SSM_PARAM. Create it with:
+    aws ssm put-parameter --name '$LAB_SSM_PARAM' --type SecureString --value '<key>'"
+        note "API key: Parameter Store ($LAB_SSM_PARAM), fetched on the instance"
+    elif [ -n "${LAB_API_KEY_CMD:-}" ]; then
+        LAB_API_KEY="$(eval "$LAB_API_KEY_CMD" 2>/dev/null || true)"
+    else
+        LAB_API_KEY="${ANTHROPIC_API_KEY:-}"
+        if [ -z "$LAB_API_KEY" ] && [ "$(uname -s)" = "Darwin" ]; then
+            LAB_API_KEY="$(security find-generic-password -a "$USER" -s ANTHROPIC_API_KEY -w 2>/dev/null || true)"
+        fi
+    fi
+    [ -n "${LAB_SSM_PARAM:-}" ] || [ -n "$LAB_API_KEY" ] \
+        || die "no Anthropic API key. Set LAB_SSM_PARAM, ANTHROPIC_API_KEY, or LAB_API_KEY_CMD in $CONF"
+
+    note "generating $STUDENTS codes"
+    CODES_JSON="$(mktemp)"; TABLE="$(mktemp)"
+    {
+        echo "{"
+        for i in $(seq 1 "$STUDENTS"); do
+            seat="$(printf 'student%02d' "$i")"
+            code="$(gen_code)"
+            printf '  "%s": "%s"%s\n' "$code" "$seat" \
+                "$([ "$i" -lt "$STUDENTS" ] && echo ,)"
+            printf '  %-12s %s\n' "$seat" "$code" >> "$TABLE"
+        done
+        echo "}"
+    } > "$CODES_JSON"
+
+    # An instance cannot have a root volume smaller than the AMI's snapshot, so
+    # take whichever is larger: what this cohort needs, or what the AMI requires.
+    AMI_GIB="$(aws ec2 describe-images --image-ids "$AMI" \
+        --query 'Images[0].BlockDeviceMappings[0].Ebs.VolumeSize' --output text)"
+    DISK_GIB="$(lab_disk_gib "$STUDENTS")"
+    if [ "$AMI_GIB" != "None" ] && [ "$AMI_GIB" -gt "$DISK_GIB" ]; then
+        note "AMI snapshot requires ${AMI_GIB} GiB (cohort needs ${DISK_GIB} GiB); using ${AMI_GIB}"
+        DISK_GIB="$AMI_GIB"
+    fi
+
+    note "launching $INSTANCE_TYPE from $AMI with ${DISK_GIB} GiB root"
+    IID="$(aws ec2 run-instances \
+        --image-id "$AMI" --instance-type "$INSTANCE_TYPE" \
+        --key-name "$KEY" --security-group-ids "$SG" --subnet-id "$(resolve_subnet "$SG")" \
+        --iam-instance-profile "Name=$PROFILE_NAME" \
+        --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=${DISK_GIB},VolumeType=gp3,Encrypted=true,DeleteOnTermination=true}" \
+        --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$TAG_NAME}]" \
+        --query 'Instances[0].InstanceId' --output text)"
+    aws ec2 wait instance-running --instance-ids "$IID"
+
+    IP="$(aws ec2 describe-instances --instance-ids "$IID" \
+          --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)"
+    note "instance $IID at $IP"
+
+    note "pointing $DOMAIN at $IP"
+    aws route53 change-resource-record-sets --hosted-zone-id "$ZONE" --change-batch "{
+        \"Changes\": [{\"Action\": \"UPSERT\", \"ResourceRecordSet\": {
+            \"Name\": \"$DOMAIN\", \"Type\": \"A\", \"TTL\": 60,
+            \"ResourceRecords\": [{\"Value\": \"$IP\"}]}}]}" >/dev/null
+
+    note "waiting for ssh"
+    for _ in $(seq 1 60); do
+        ssh $SSH_OPTS "ubuntu@$IP" true 2>/dev/null && break
+        sleep 5
+    done
+    ssh $SSH_OPTS "ubuntu@$IP" true 2>/dev/null || die "ssh to $IP never came up"
+
+    if [ -n "$STAGING" ]; then
+        # Let's Encrypt allows only 5 duplicate certificates per week for the
+        # same hostname. A debugging loop will exhaust that and lock the real
+        # certificate out, so iterate against staging and accept the browser
+        # warning.
+        note "using Let's Encrypt STAGING (browsers will warn; certs are untrusted)"
+        ssh $SSH_OPTS "ubuntu@$IP" "sudo tee /etc/caddy/Caddyfile >/dev/null <<'CF'
+{
+    acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+${DOMAIN} {
+    reverse_proxy 127.0.0.1:8000
+}
+CF"
+    fi
+
+    note "delivering codes and starting the hub"
+    scp $SSH_OPTS -q "$CODES_JSON" "ubuntu@$IP:/tmp/codes.json"
+    if [ -n "${LAB_SSM_PARAM:-}" ]; then
+        # \$( ) is escaped deliberately: it evaluates on the instance, using the
+        # instance role, so the key never crosses this ssh session.
+        ssh $SSH_OPTS "ubuntu@$IP" \
+            "sudo install -m 0644 /tmp/codes.json /opt/lab/hub/codes.json && \
+             cd /opt/lab && sudo LAB_CURRICULUM='$CURRICULUM' LAB_MEM_LIMIT='${MEM_PER}G' \
+             ANTHROPIC_API_KEY=\$(aws ssm get-parameter --name '$LAB_SSM_PARAM' \
+                --with-decryption --query Parameter.Value --output text) \
+             docker compose up -d"
+    else
+        ssh $SSH_OPTS "ubuntu@$IP" \
+            "sudo install -m 0644 /tmp/codes.json /opt/lab/hub/codes.json && \
+             cd /opt/lab && sudo LAB_CURRICULUM='$CURRICULUM' LAB_MEM_LIMIT='${MEM_PER}G' \
+             ANTHROPIC_API_KEY='$LAB_API_KEY' docker compose up -d"
+    fi
+
+    # Restart Caddy now that the A record points here, so it requests the
+    # certificate immediately instead of waiting out its ACME backoff.
+    ssh $SSH_OPTS "ubuntu@$IP" "sudo systemctl restart caddy"
+
+    # Staging certificates are deliberately untrusted, so the readiness probe
+    # must skip verification or it reports a working deployment as broken.
+    PROBE="-sf"; [ -n "$STAGING" ] && PROBE="-sfk"
+    note "waiting for https://$DOMAIN"
+    for _ in $(seq 1 60); do
+        curl $PROBE "https://$DOMAIN/hub/login" -o /dev/null 2>/dev/null && break
+        sleep 5
+    done
+    curl $PROBE "https://$DOMAIN/hub/login" -o /dev/null 2>/dev/null \
+        || echo "warning: https not answering yet; check Caddy on the box" >&2
+
+    echo
+    echo "  URL:  https://$DOMAIN"
+    echo "  curriculum: $CURRICULUM"
+    echo
+    cat "$TABLE"
+    echo
+    rm -f "$CODES_JSON" "$TABLE"
+    ;;
+
+down)
+    IID="$(running_instance)"
+    if [ -z "$IID" ]; then
+        note "no running workshop instance"
+    else
+        note "terminating $IID (root volume is DeleteOnTermination; nothing is preserved)"
+        aws ec2 terminate-instances --instance-ids "$IID" >/dev/null
+    fi
+
+    DOMAIN="$(stack_output DomainName)"; ZONE="$(stack_output HostedZoneId)"
+    # The filter needs spaces around && and a pipe to index the match; without
+    # them the query returns empty and the A record is silently left pointing at
+    # a terminated instance.
+    EXISTING="$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE" \
+        --query "ResourceRecordSets[?Name=='${DOMAIN}.' && Type=='A'] | [0].ResourceRecords[0].Value" \
+        --output text 2>/dev/null | tr -d '\t')"
+    if [ -n "$EXISTING" ] && [ "$EXISTING" != "None" ]; then
+        note "removing A record $DOMAIN -> $EXISTING"
+        aws route53 change-resource-record-sets --hosted-zone-id "$ZONE" --change-batch "{
+            \"Changes\": [{\"Action\": \"DELETE\", \"ResourceRecordSet\": {
+                \"Name\": \"$DOMAIN\", \"Type\": \"A\", \"TTL\": 60,
+                \"ResourceRecords\": [{\"Value\": \"$EXISTING\"}]}}]}" >/dev/null
+    fi
+    note "down. Idle cost is now the hosted zone plus AMI snapshots only."
+    ;;
+
+status)
+    echo
+    echo "  durable stack   $(aws cloudformation describe-stacks --stack-name "$STACK" \
+                              --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo 'NOT DEPLOYED')"
+    echo "  domain          $(stack_output DomainName)"
+    IID="$(running_instance)"
+    if [ -n "$IID" ]; then
+        aws ec2 describe-instances --instance-ids "$IID" \
+            --query 'Reservations[0].Instances[0].[InstanceId,InstanceType,PublicIpAddress,LaunchTime]' \
+            --output text | while read -r id type ip launched; do
+                echo "  instance        $id  $type  $ip"
+                echo "  launched        $launched"
+            done
+    else
+        echo "  instance        none running  (\$0/hr)"
+    fi
+    AMIS="$(aws ec2 describe-images --owners self --filters "Name=tag:Name,Values=$TAG_NAME" \
+            --query 'length(Images)' --output text 2>/dev/null || echo 0)"
+    echo "  workshop AMIs   $AMIS"
+    echo
+    ;;
+
+help|*)
+    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+esac

@@ -1,0 +1,40 @@
+# Workshop shell: welcome banner, then straight into Claude Code.
+# Sourced from ~/.bashrc. Must be a no-op for non-interactive shells.
+
+case $- in
+    *i*) ;;      # interactive — carry on
+      *) return ;;
+esac
+
+# Claude Code spawns shells of its own; without this guard we'd recurse.
+[ -n "${LAB_SHELL_STARTED:-}" ] && return
+export LAB_SHELL_STARTED=1
+
+echo ""
+echo "  ─────────────────────────────────────────────────────────────"
+if [ -r "$HOME/.lab-welcome" ]; then
+    # Curriculum-supplied welcome text (curricula/<name>/welcome.txt).
+    sed 's/^/  /' "$HOME/.lab-welcome"
+else
+    echo "   AI Agents Lab"
+    echo ""
+    echo "   Your lessons are in  ~/lessons"
+fi
+cat <<'TAIL'
+  ─────────────────────────────────────────────────────────────
+
+   NOTHING HERE IS SAVED. This environment is deleted when the
+   class ends. Copy out anything you want to keep.
+
+  ─────────────────────────────────────────────────────────────
+
+TAIL
+
+printf '   Starting Claude Code — press "t" then Enter for a plain shell.\n\n'
+read -r -t 10 _lab_choice || true
+
+if [ "${_lab_choice:-}" != "t" ] && [ "${_lab_choice:-}" != "T" ]; then
+    unset _lab_choice
+    exec claude --dangerously-skip-permissions
+fi
+unset _lab_choice

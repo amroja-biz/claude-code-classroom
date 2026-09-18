@@ -1,0 +1,7 @@
+   Intro to AI Agents
+
+   Lessons:   ~/lessons   (course material — read only)
+   Your work: ~/work      (everything you create goes here)
+
+   Start with  ~/lessons/01-first-agent/README.md
+   Ask Claude: "walk me through lesson 1"

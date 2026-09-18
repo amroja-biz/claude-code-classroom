@@ -1,0 +1,14 @@
+# Secrets — never commit
+codes.json
+!codes.example.json
+workshop.conf
+!workshop.conf.example
+*.pem
+*.key
+.env
+secrets/
+
+# Local state
+.DS_Store
+__pycache__/
+*.pyc

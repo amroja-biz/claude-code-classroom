@@ -1,0 +1,30 @@
+# Local development harness. Mirrors the on-box layout: the hub runs in a
+# container and spawns sibling student containers through the Docker socket.
+# On the box, Caddy sits in front of port 8000 and terminates TLS; locally you
+# hit http://localhost:8000 directly, which browsers treat as a secure origin.
+
+services:
+  jupyterhub:
+    build: ./hub
+    image: lab-hub:latest
+    container_name: lab-hub
+    restart: unless-stopped
+    networks: [lab-net]
+    ports:
+      # Loopback only. Caddy proxies to this on the box; locally it is
+      # still reachable as http://localhost:8000.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+      - ./hub/codes.json:/etc/jupyterhub/codes.json:ro
+    environment:
+      DOCKER_NETWORK_NAME: lab-net
+      LAB_STUDENT_IMAGE: lab-student:latest
+      HUB_CONNECT_IP: lab-hub
+      LAB_MEM_LIMIT: "2G"
+      LAB_CURRICULUM: "${LAB_CURRICULUM:-intro-agents}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+
+networks:
+  lab-net:
+    name: lab-net

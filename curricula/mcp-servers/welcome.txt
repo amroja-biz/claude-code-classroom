@@ -1,0 +1,7 @@
+   Building MCP Servers
+
+   Lessons:   ~/lessons   (course material — read only)
+   Your work: ~/work      (everything you create goes here)
+
+   Start with  ~/lessons/01-what-is-mcp/README.md
+   Ask Claude: "what is MCP and why would I use it?"

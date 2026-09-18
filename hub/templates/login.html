@@ -1,0 +1,76 @@
+{# Single-field login: students enter the code from their handout, nothing else.
+
+   Adapted from the login.html shipped with jupyterhub 6.0.1 (pinned in
+   hub/requirements.txt). Jinja cannot `extends` a template of the same name
+   through the same loader, so this is a trimmed copy rather than an override of
+   the stock blocks. If you bump the jupyterhub pin, re-check this against the
+   new stock template:
+
+     docker run --rm lab-hub:latest \
+       cat /usr/local/share/jupyterhub/templates/login.html
+
+   Dropped from the stock version: the username field (replaced by a hidden
+   value — the authenticator derives the seat name from the code), the
+   password-visibility toggle, the OTP block, and the terms checkbox.
+#}
+{% extends "page.html" %}
+{% if announcement_login is string %}
+  {% set announcement = announcement_login %}
+{% endif %}
+{% block login_widget %}
+{% endblock login_widget %}
+{% block main %}
+  <div id="login-main" class="container">
+    <form action="{{ authenticator_login_url }}" method="post" role="form">
+      <div class="auth-form-header">
+        <h1>AI Agents Lab</h1>
+      </div>
+      <div class="auth-form-body m-auto">
+        <p id="insecure-login-warning" class="hidden alert alert-warning">
+          Warning: this page is being served over an unsecured HTTP connection.
+        </p>
+        {% if login_error %}<p class="login_error">{{ login_error }}</p>{% endif %}
+
+        <input type="hidden" name="_xsrf" value="{{ xsrf }}" />
+        <input type="hidden" name="username" value="code" />
+
+        <label for="password_input">Enter the code from your handout</label>
+        <input id="password_input"
+               type="text"
+               class="form-control"
+               name="password"
+               autocomplete="off"
+               autocapitalize="off"
+               autocorrect="off"
+               spellcheck="false"
+               placeholder="blue-otter-42"
+               autofocus="autofocus" />
+
+        <div class="feedback-container">
+          <input id="login_submit"
+                 type="submit"
+                 class="btn btn-jupyter form-control"
+                 value="Start" />
+          <div class="feedback-widget hidden">
+            <i class="fa fa-spinner"></i>
+          </div>
+        </div>
+      </div>
+    </form>
+  </div>
+{% endblock main %}
+{% block script %}
+  {{ super() }}
+  <script>
+    if (!window.isSecureContext) {
+      var warning = document.getElementById('insecure-login-warning');
+      warning.className = warning.className.replace(/\bhidden\b/, '');
+    }
+    $('form').submit((e) => {
+      var form = $(e.target);
+      form.find('.feedback-container>input').attr('disabled', true);
+      form.find('.feedback-container>*').toggleClass('hidden');
+      form.find('.feedback-widget>*').toggleClass('fa-pulse');
+    });
+  </script>
+{% endblock script %}
