@@ -1,4 +1,4 @@
-# aws-lab-creator-ai-agents
+# claude-code-class-environment-aws
 
 A disposable workshop environment for teaching people to work with AI agents.
 Students open a URL, enter a code from their handout, and land in a browser
