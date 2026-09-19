@@ -1,5 +1,5 @@
 ---
-name: setup
+name: claude-class-aws-setup
 description: Set up this workshop environment in the user's AWS account — discovers their VPC, subnet and Route53 zones, asks only what cannot be inferred, writes workshop.conf, deploys the CloudFormation stack, stores the API key, and verifies. Use when the user wants to install, configure, set up, deploy or get started with this repo, or says the workshop is not working and they need to check their configuration.
 ---
 

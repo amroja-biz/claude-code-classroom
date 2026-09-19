@@ -35,7 +35,7 @@ Open this repo in Claude Code (or any coding agent that reads
 `.claude/skills/`) and run:
 
 ```
-/setup
+/claude-class-aws-setup
 ```
 
 It inspects your AWS account, offers choices instead of asking for resource IDs,
