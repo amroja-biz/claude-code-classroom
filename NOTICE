@@ -1,0 +1,71 @@
+This product includes software derived from go-jupyter, developed by the Gene
+Ontology Consortium:
+
+    https://github.com/geneontology/go-jupyter
+
+go-jupyter solves the same problem — JupyterHub on EC2 giving each participant a
+browser terminal with Claude Code — for agentic biocuration workshops. This
+project is an independent re-architecture around disposable, per-cohort
+infrastructure.
+
+Measured 2026-09-18: roughly 105 of this project's ~1,870 code lines (about 6%)
+are derived from it, and those 105 represent about 1% of that project's source.
+None of its Terraform, helper scripts, systemd units or curriculum were used.
+The following are the derived parts, and they remain subject to the BSD 3-Clause
+License reproduced below:
+
+  student-image/seed-home.sh
+      The Claude Code state seeding: the set of `.claude.json` and
+      `.claude/settings.json` keys that suppress first-run prompts, and the
+      `customApiKeyResponses` technique of pre-approving an injected API key by
+      its last 20 characters. Ported from that project's
+      `jupyterhub_config.py` pre_spawn_hook.
+
+  student-image/skel/.lab-bashrc
+      The welcome-banner-then-launch-Claude shell pattern, with a keypress to
+      drop to a plain shell instead. The idea comes from its
+      `user-templates/*/.bashrc`; the implementation here was written
+      independently and shares no lines. Attributed conservatively.
+
+  hub/jupyterhub_config.py
+      The Claude Code environment variable set (CLAUDE_CODE_NO_FLICKER,
+      DISABLE_AUTOUPDATER, DISABLE_TELEMETRY, DISABLE_NON_ESSENTIAL_MODEL_CALLS)
+      and the rationale for each. Four variable names; attributed because the
+      knowledge of which ones matter is the contribution.
+
+Several operational decisions also follow findings published in that project's
+workshop write-up, including the per-seat disk sizing, the session-hygiene and
+tone guidance in the example curricula, and the note that model API spend
+dominates infrastructure cost.
+
+The remainder of this project — the container-per-student spawner
+configuration, code-based authentication, curriculum system, CloudFormation,
+the workshop lifecycle scripts and the test suites — is original work under the
+MIT License in LICENSE.
+
+--------------------------------------------------------------------------------
+
+Copyright (c) 2026, Gene Ontology Consortium (http://geneontology.org)
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of the Gene Ontology Consortium nor the
+      names of its contributors may be used to endorse or promote products
+      derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

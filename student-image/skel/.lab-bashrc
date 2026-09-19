@@ -1,5 +1,7 @@
 # Workshop shell: welcome banner, then straight into Claude Code.
 # Sourced from ~/.bashrc. Must be a no-op for non-interactive shells.
+#
+# Pattern derived from geneontology/go-jupyter (BSD 3-Clause) -- see NOTICE.
 
 case $- in
     *i*) ;;      # interactive — carry on

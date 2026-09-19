@@ -90,6 +90,8 @@ if [ -f "${HOME_DIR}/.lab-bashrc" ] && ! grep -q '.lab-bashrc' "${HOME_DIR}/.bas
 fi
 
 # --- Claude Code state -------------------------------------------------------
+# Derived from geneontology/go-jupyter (BSD 3-Clause) -- see NOTICE.
+#
 # Every field here suppresses a prompt that would otherwise stop a non-technical
 # student cold. customApiKeyResponses is the load-bearing one: with
 # ANTHROPIC_API_KEY injected, Claude Code asks "Detected a custom API key ... use

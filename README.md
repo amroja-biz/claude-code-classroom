@@ -307,3 +307,26 @@ implicitly allowing users that authenticate successfully.
 
 **An instance cannot have a root volume smaller than its AMI's snapshot.** `up`
 takes whichever is larger, cohort need or AMI floor, and says so.
+
+## Acknowledgements
+
+This project began as a re-architecture of
+[geneontology/go-jupyter](https://github.com/geneontology/go-jupyter), which
+solves the same problem — JupyterHub on EC2 giving each participant a browser
+terminal with Claude Code — for agentic biocuration workshops run by the Gene
+Ontology Consortium.
+
+Beyond the architecture, their published workshop write-up supplied findings
+this project acts on directly: which Claude Code settings suppress first-run
+prompts, that per-user tool caches rather than authored files drive disk
+requirements, that context carried between exercises triggers compaction, and
+that model API spend dwarfs infrastructure cost by roughly 50x. Those are
+expensive lessons to learn from a live room, and they published them.
+
+About 6% of this project's code is derived from theirs — principally the Claude
+Code first-run state seeding — and remains under its BSD 3-Clause License. See
+[NOTICE](NOTICE) for exactly which parts and how that was measured.
+
+## License
+
+MIT — see [LICENSE](LICENSE), and [NOTICE](NOTICE) for the derived portions.

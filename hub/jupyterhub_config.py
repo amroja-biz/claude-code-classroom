@@ -88,6 +88,8 @@ _student_env = {
     "DISABLE_AUTOUPDATER": "1",
     "DISABLE_TELEMETRY": "1",
     "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
+    # This env set, and the reasoning for each, is derived from
+    # geneontology/go-jupyter (BSD 3-Clause) -- see NOTICE.
     # Reduces scrollbar reset artifacts in the xterm.js terminal JupyterLab uses.
     "CLAUDE_CODE_NO_FLICKER": "1",
 }
