@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Workshop lifecycle.
 #
+#   workshop init                                          deploy the durable stack
 #   workshop build                                         bake the AMI (day before)
 #   workshop size  --students N [--mem 2] [--hours 6]      what it would cost
 #   workshop up    --students N --curriculum NAME [--staging]  prints URL + codes
@@ -98,6 +99,59 @@ require_students() {
 }
 
 case "$SUB" in
+
+init)
+    # Deploy the durable stack from workshop.conf, so the README is one command
+    # and every account-specific value has exactly one home.
+    [ -n "${LAB_DOMAIN:-}" ]  || die "LAB_DOMAIN is not set in $CONF"
+    [ -n "${LAB_VPC_ID:-}" ]  || die "LAB_VPC_ID is not set in $CONF"
+    KEYFILE="${LAB_SSH_PUBLIC_KEY:-}"
+    [ -n "$KEYFILE" ] || die "LAB_SSH_PUBLIC_KEY is not set in $CONF"
+    # Expand ~ even when the value was quoted in the config file.
+    KEYFILE="${KEYFILE/#\~/$HOME}"
+    [ -f "$KEYFILE" ] || die "SSH public key not found: $KEYFILE"
+
+    if [ -n "${LAB_HOSTED_ZONE_ID:-}" ]; then
+        note "using your existing hosted zone ${LAB_HOSTED_ZONE_ID}"
+    else
+        note "no LAB_HOSTED_ZONE_ID set: the stack will create a zone for $LAB_DOMAIN,"
+        note "which you must then delegate from the parent zone (see below)"
+    fi
+
+    note "deploying $STACK"
+    aws cloudformation deploy \
+        --template-file infra/durable.yaml \
+        --stack-name "$STACK" \
+        --capabilities CAPABILITY_IAM \
+        --no-fail-on-empty-changeset \
+        --parameter-overrides \
+            DomainName="$LAB_DOMAIN" \
+            ExistingHostedZoneId="${LAB_HOSTED_ZONE_ID:-}" \
+            VpcId="$LAB_VPC_ID" \
+            SsmParameterName="${LAB_SSM_PARAM:-}" \
+            SshPublicKey="$(cat "$KEYFILE")" \
+        || die "stack deploy failed"
+
+    if [ -z "${LAB_HOSTED_ZONE_ID:-}" ]; then
+        echo
+        echo "  Delegate $LAB_DOMAIN by adding these as an NS record in the parent zone:"
+        stack_output NameServers | tr ',' '\n' | sed 's/^/    /'
+        echo
+        echo "  Then confirm:  dig +short NS $LAB_DOMAIN"
+    fi
+
+    if [ -n "${LAB_SSM_PARAM:-}" ]; then
+        if aws ssm get-parameter --name "$LAB_SSM_PARAM" >/dev/null 2>&1; then
+            note "API key parameter $LAB_SSM_PARAM exists"
+        else
+            echo
+            echo "  Now store the API key:"
+            echo "    aws ssm put-parameter --name '$LAB_SSM_PARAM' \\"
+            echo "        --type SecureString --value 'sk-ant-...'"
+        fi
+    fi
+    note "init complete"
+    ;;
 
 size)
     require_students

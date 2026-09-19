@@ -42,30 +42,24 @@ cp workshop.conf.example workshop.conf && $EDITOR workshop.conf
 hosted zone, profile, region, VPC, SSH key, stack name, curricula directory, and
 where the API key comes from. Each setting is commented in the example.
 
-Store the key in Parameter Store so the instance fetches it under its own IAM
-role rather than you handling it:
+Then deploy the durable resources — security group, IAM role, key pair and DNS:
+
+```bash
+./scripts/workshop init
+```
+
+That reads `workshop.conf`, so there is nothing to retype. If you set
+`LAB_HOSTED_ZONE_ID` to a Route53 zone you already own in this account, the stack
+writes records into it. Leave it empty and the stack creates a zone for the
+subdomain instead, printing the nameservers to delegate from the parent — the
+path to use when the parent domain lives in a different AWS account.
+
+Finally store the API key where the instance can fetch it under its own IAM role,
+rather than you handling it on every `up`:
 
 ```bash
 aws ssm put-parameter --name /ai-agents-lab/anthropic-api-key \
   --type SecureString --value 'sk-ant-...'
-```
-
-Then deploy the durable resources — security group, IAM role, key pair, DNS.
-Pass `ExistingHostedZoneId` for the Route53 zone you already own in this account.
-Leave it empty only if you want a separate zone for the subdomain, which then
-needs delegating from the parent — the path to use when the parent lives in a
-different AWS account. See `infra/durable.yaml`.
-
-```bash
-aws cloudformation deploy \
-  --template-file infra/durable.yaml \
-  --stack-name "$LAB_STACK" --capabilities CAPABILITY_IAM \
-  --parameter-overrides \
-      DomainName="$LAB_DOMAIN" \
-      ExistingHostedZoneId="$LAB_HOSTED_ZONE_ID" \
-      VpcId="$LAB_VPC_ID" \
-      SsmParameterName=/ai-agents-lab/anthropic-api-key \
-      SshPublicKey="$(cat ~/.ssh/id_ed25519.pub)"
 ```
 
 ## Run a workshop
