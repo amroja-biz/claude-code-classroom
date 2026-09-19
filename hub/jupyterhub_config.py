@@ -7,6 +7,7 @@ there are no accounts, no passwords, and no persistence between cohorts.
 
 import json
 import os
+import sys
 
 from jupyterhub.auth import Authenticator
 
@@ -64,6 +65,28 @@ c.DockerSpawner.use_internal_ip = True
 c.DockerSpawner.remove = True
 c.DockerSpawner.volumes = {"lab-student-{username}": "/home/jovyan"}
 
+# Course material is mounted, not baked into the image, so fixing a lesson is a
+# respawn rather than an image rebuild plus an AMI rebake.
+#
+# This hub runs in a container and spawns siblings through the Docker socket, so
+# the daemon resolves this path on the HOST -- it is not this container's view of
+# the filesystem, and must be passed in as an absolute host path.
+# Read-only: one student editing shared material must not change it for the cohort.
+_curricula_host_dir = os.environ.get("LAB_CURRICULA_HOST_DIR", "").strip()
+if _curricula_host_dir:
+    c.DockerSpawner.volumes[_curricula_host_dir] = {
+        "bind": "/opt/lab/curricula",
+        "mode": "ro",
+    }
+else:
+    # Not fatal: seed-home falls back to base files and logs loudly. Failing the
+    # spawn instead would turn a content problem into an outage.
+    print(
+        "[lab] WARNING: LAB_CURRICULA_HOST_DIR is not set; "
+        "students will get base files only",
+        file=sys.stderr,
+    )
+
 # The cap that makes a shared box safe: one runaway agent gets OOM-killed in its
 # own cgroup instead of driving the host into memory-reclaim livelock.
 c.DockerSpawner.mem_limit = os.environ.get("LAB_MEM_LIMIT", "2G")
@@ -81,9 +104,9 @@ c.DockerSpawner.extra_create_kwargs = {"healthcheck": {"Test": ["NONE"]}}
 # The shared workshop key, passed through to every student container.
 _api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 _student_env = {
-    # Which curriculum seed-home copies into the student's home. All curricula
-    # are baked into the image, so changing this between cohorts needs only a
-    # hub restart -- no image or AMI rebuild.
+    # Which curriculum seed-home copies into the student's home, selected from
+    # whatever is mounted at /opt/lab/curricula. Changing it between cohorts
+    # needs only a hub restart.
     "LAB_CURRICULUM": os.environ.get("LAB_CURRICULUM", "").strip(),
     "DISABLE_AUTOUPDATER": "1",
     "DISABLE_TELEMETRY": "1",

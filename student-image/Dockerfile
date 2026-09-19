@@ -1,13 +1,13 @@
 # Student workspace: JupyterLab + Claude Code, one container per student.
 #
-# BUILD CONTEXT IS THE REPO ROOT, not this directory, so that curricula/ (which
-# instructors author) can live at the top level:
+# BUILD CONTEXT IS THE REPO ROOT, not this directory:
 #
 #   docker build -f student-image/Dockerfile -t lab-student:latest .
 #
-# Build for the target platform explicitly. Claude Code ships as a Bun binary
-# that crashes under QEMU emulation, so build NATIVE for local testing and
-# --platform linux/amd64 only for the EC2 AMI. See README.
+# Always built natively: locally by `make dev-build`, and on the EC2 build
+# instance by `workshop build`. Never cross-built. Claude Code ships as a Bun
+# binary that crashes under QEMU emulation, so an emulated image is useless. See
+# README.
 FROM quay.io/jupyter/minimal-notebook:latest
 
 # Pin at build time for reproducibility; defaults to whatever is current.
@@ -33,10 +33,12 @@ RUN mkdir -p /etc/claude-code \
 # volume there at spawn time, which would shadow anything baked into that path.
 # seed-home copies it in at container start instead.
 #
-# ALL curricula are baked in; $LAB_CURRICULUM picks one at spawn time. That means
-# switching a cohort to different material needs no image rebuild -- only
-# authoring new material does.
-COPY curricula/          /opt/lab/curricula/
+# Curricula are deliberately NOT baked in. The spawner bind-mounts them
+# read-only at /opt/lab/curricula, so editing a lesson costs a respawn rather
+# than an image rebuild and a 20-minute AMI rebake. Course material changes far
+# more often than the toolchain does, and tying the two to one artifact meant a
+# typo in lesson 3 could not be fixed on the morning of a workshop.
+# $LAB_CURRICULUM still selects among whatever is mounted, at spawn time.
 COPY student-image/skel/ /opt/lab/skel/
 
 # docker-stacks SOURCES every .sh in before-notebook.d into start.sh, so the hook

@@ -10,13 +10,18 @@
 set -uo pipefail
 
 IMAGE="${1:-lab-student:latest}"
+# Curricula are mounted, not baked in, so the test has to supply them the same
+# way the spawner does.
+CURRICULA_DIR="${LAB_CURRICULA_DIR:-$(cd "$(dirname "$0")/../curricula" && pwd)}"
+MOUNT=(-v "${CURRICULA_DIR}:/opt/lab/curricula:ro")
 fails=0
 pass() { printf '    ok   %s\n' "$1"; }
 fail() { printf '    FAIL %s\n' "$1"; fails=$((fails + 1)); }
 
 # Run the seed inside a throwaway container and dump the resulting home.
 seed() {
-    docker run --rm -e "LAB_CURRICULUM=$1" -e ANTHROPIC_API_KEY=sk-test-0123456789ABCDEFGHIJ \
+    docker run --rm "${MOUNT[@]}" \
+        -e "LAB_CURRICULUM=$1" -e ANTHROPIC_API_KEY=sk-test-0123456789ABCDEFGHIJ \
         --entrypoint /bin/bash "$IMAGE" -c '
             /usr/local/bin/lab-seed-home 2>/tmp/seed.log
             echo "===FILES==="; find "$HOME" -maxdepth 3 \
@@ -70,7 +75,7 @@ echo
 echo "== curriculum beats base skel =="
 # Regression: skel is copied first, and with cp -rn a base file would silently
 # win over the curriculum's own version of the same path.
-cm="$(docker run --rm -e LAB_CURRICULUM=mcp-servers --entrypoint /bin/bash "$IMAGE" \
+cm="$(docker run --rm "${MOUNT[@]}" -e LAB_CURRICULUM=mcp-servers --entrypoint /bin/bash "$IMAGE" \
       -c '/usr/local/bin/lab-seed-home 2>/dev/null; cat "$HOME/CLAUDE.md" 2>/dev/null' 2>/dev/null)"
 grep -q 'Model Context Protocol' <<<"$cm" && pass "curriculum CLAUDE.md wins" \
                                           || fail "curriculum CLAUDE.md was shadowed"
@@ -80,6 +85,22 @@ echo "== marker records what was seeded =="
 out="$(seed mcp-servers)"
 marker="$(sed -n '/===MARKER===/,/===WELCOME===/p' <<<"$out" | sed '1d;$d' | tr -d '[:space:]')"
 [ "$marker" = "mcp-servers" ] && pass "marker = $marker" || fail "marker = '$marker' (want mcp-servers)"
+
+echo
+echo "== curricula are NOT baked into the image =="
+# Regression guard. Material lived in the image once, which meant a one-line
+# lesson fix cost a 20-minute AMI rebake. If a COPY comes back, catch it here
+# rather than discovering it the morning of a workshop.
+baked="$(docker run --rm --entrypoint /bin/bash "$IMAGE" \
+         -c 'ls -A /opt/lab/curricula 2>/dev/null' 2>/dev/null | tr -d '[:space:]')"
+[ -z "$baked" ] && pass "image ships no curricula" \
+                || fail "curricula are baked into the image again: $baked"
+
+# And with nothing mounted, the lab must degrade loudly rather than look fine.
+nomount="$(docker run --rm -e LAB_CURRICULUM=intro-agents --entrypoint /bin/bash "$IMAGE" \
+           -c '/usr/local/bin/lab-seed-home 2>&1 >/dev/null' 2>/dev/null)"
+grep -q 'no curricula' <<<"$nomount" && pass "unmounted degrades loudly" \
+                                     || fail "unmounted lab was silent"
 
 echo
 if [ "$fails" -eq 0 ]; then

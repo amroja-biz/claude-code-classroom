@@ -107,11 +107,13 @@ Course material is data. A curriculum is a directory:
 └── everything else             copied to ~/  (lessons/, CLAUDE.md, ...)
 ```
 
-All curricula are baked into the image and one is chosen at spawn time, so
-switching material is a flag, not a rebuild. Students get `~/lessons` (read-only
-material) and `~/work` (their files) — a contract stated in each curriculum's
-`CLAUDE.md`. Point `LAB_CURRICULA_DIR` outside this repo to keep your content
-private; the two here are examples.
+Curricula are mounted into student containers, not baked into the image, and one
+is chosen at spawn time. Editing a lesson costs a re-run of `workshop up`, not an
+image rebuild and a 20-minute AMI rebake — so a typo found on the morning of a
+workshop is fixable. Students get `~/lessons` (read-only material) and `~/work`
+(their files) — a contract stated in each curriculum's `CLAUDE.md`. Point
+`LAB_CURRICULA_DIR` outside this repo to keep your content private; the two here
+are examples.
 
 ## Local development
 
@@ -125,11 +127,12 @@ make dev-reset                                          # wipe and start over
 
 Log in with a code from `hub/codes.json`.
 
-**Build native locally, amd64 for the AMI.** Claude Code is a Bun binary whose JS
-engine crashes under QEMU, so an amd64 student image on Apple Silicon serves
-JupyterLab but won't start Claude Code. `make dev-build` is native;
-`make prod-build` is amd64. Other traps of this kind are in
-[`docs/SPEC.md`](docs/SPEC.md).
+**Local images are native; the AMI is built on the box.** `workshop build` builds
+the images on the EC2 instance, so the shipped image is always amd64 without
+cross-building. On Apple Silicon your local image is therefore arm64. Don't try
+to close the gap by building amd64 locally: Claude Code is a Bun binary whose JS
+engine crashes under QEMU, so such an image serves JupyterLab but won't start
+Claude Code. Other traps of this kind are in [`docs/SPEC.md`](docs/SPEC.md).
 
 ## Acknowledgements
 

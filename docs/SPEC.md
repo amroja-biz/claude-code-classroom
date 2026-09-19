@@ -240,10 +240,26 @@ fixed asset. A curriculum is a directory under `curricula/`:
       skills/        (optional)  -> ~/.claude/skills/
       *                          -> ~/   (lessons/, CLAUDE.md, data/, ...)
 
-**Every curriculum is baked into the image; `$LAB_CURRICULUM` selects one at
-spawn time.** Switching a cohort to different material is therefore a flag on
-`workshop up`, not an image or AMI rebuild. Only authoring new material requires
-a rebuild — which is fine, because the build already happens the day before.
+**Curricula are bind-mounted read-only into each student container at
+/opt/lab/curricula; `$LAB_CURRICULUM` selects one at spawn time.** `workshop up`
+delivers them to the instance; `workshop build` does not put them in the AMI.
+
+> **Revised 2026-09-19.** They *were* baked into the image. The original
+> rationale — switching cohorts is a flag, and "only authoring new material
+> requires a rebuild, which is fine because the build happens the day before" —
+> defended the wrong case. Authoring is iterative and is the thing that actually
+> changes; the toolchain is not. Coupling a fast-changing artifact to a
+> slow-changing one meant a one-line lesson fix cost a 20-minute AMI rebake and
+> could not be done on the morning of a workshop at all. Nothing was gained in
+> exchange: `workshop build` scp's the working tree (§6), so the AMI never pinned
+> curricula to anything reviewable, and the instance is destroyed at `down`, so
+> there is no long-lived box for mutable content to drift on.
+
+The mount path is resolved by the **host** Docker daemon, not by the hub's own
+filesystem — the hub is itself a container spawning siblings through the socket —
+so it is passed in as an absolute host path via `LAB_CURRICULA_HOST_DIR`. Unset,
+the spawn still succeeds and degrades to base files with a loud log, because a
+content problem should not become an outage.
 
 An unknown name falls back to the alphabetically-first curriculum and logs a
 warning. The fallback is deliberate: silently teaching the wrong material is
@@ -447,12 +463,19 @@ mode — because there is no data to lose.
 Discovered 2026-09-18 while building and verifying the platform locally. Each of
 these cost real debugging time and none is obvious from the documentation.
 
-**Architecture: build native locally, amd64 for the AMI.** Claude Code 2.x ships
-as a Bun standalone binary. Bun's JS engine crashes under QEMU user-mode
-emulation with `ASSERTION FAILED: MemoryExhaustion` -> `qemu: uncaught target
-signal 6`. On Apple Silicon an amd64 student image spawns and serves JupyterLab
-correctly but Claude Code will not start, which looks like a Claude Code bug and
-is not one. `make dev-build` builds native; `make prod-build` builds amd64.
+**Never cross-build the student image.** Claude Code 2.x ships as a Bun
+standalone binary. Bun's JS engine crashes under QEMU user-mode emulation with
+`ASSERTION FAILED: MemoryExhaustion` -> `qemu: uncaught target signal 6`. On
+Apple Silicon an amd64 student image spawns and serves JupyterLab correctly but
+Claude Code will not start, which looks like a Claude Code bug and is not one.
+
+Every build is therefore native: `make dev-build` on the host for local testing,
+and `provision.sh` on the EC2 build instance for the AMI. A `prod-build` target
+existed briefly to cross-build amd64 locally; it was removed 2026-09-19 because
+nothing invoked it and its output could not be run on the machine that produced
+it. The consequence to keep in mind is that on Apple Silicon local testing
+exercises an arm64 image while the AMI is amd64 — a limit of local testing, not
+a flag to set.
 
 **Never set shell options in a `before-notebook.d` hook.** jupyter/docker-stacks
 *sources* those scripts into `start.sh`. A `set -euo pipefail` leaks `set -u`

@@ -117,6 +117,11 @@ discover)
     printf '  "identity": %s,\n' "$(aws sts get-caller-identity --output json 2>/dev/null || echo null)"
     printf '  "region": "%s",\n' "$AWS_REGION"
     printf '  "profile": "%s",\n' "$AWS_PROFILE"
+    # Every aws call in this script inherits one exported AWS_PROFILE, so a
+    # multi-account operator must choose deliberately rather than fall through
+    # to "default". Listing them lets the setup skill ask instead of guess.
+    printf '  "profiles": [%s],\n' "$(aws configure list-profiles 2>/dev/null \
+        | awk 'BEGIN{ORS=""} {printf "%s\"%s\"", (NR>1?",":""), $0}')"
     printf '  "vpcs": %s,\n' "$(aws ec2 describe-vpcs \
         --query 'Vpcs[].{id:VpcId,cidr:CidrBlock,default:IsDefault,name:Tags[?Key==`Name`]|[0].Value}' \
         --output json 2>/dev/null || echo '[]')"
@@ -242,16 +247,15 @@ build)
     TARBALL="$(mktemp -t lab).tar.gz"
     # COPYFILE_DISABLE stops macOS tar from embedding ._* AppleDouble resource
     # forks, which GNU tar on the box then warns about for every single file.
-    # Curricula may live outside this repo (LAB_CURRICULA_DIR), so stage them
-    # under the name the image expects rather than assuming ./curricula.
+    # Curricula are deliberately NOT shipped here. The AMI carries the toolchain,
+    # which is slow to build and rarely changes; course material is delivered by
+    # `workshop up` so a lesson edit costs a respawn, not a 20-minute rebake.
     STAGE="$(mktemp -d)"
     cp -r hub student-image docker-compose.yml "$STAGE"/
     mkdir -p "$STAGE/scripts" && cp scripts/provision.sh "$STAGE/scripts"/
-    [ -d "$CURRICULA_DIR" ] || die "curricula directory not found: $CURRICULA_DIR"
-    cp -r "$CURRICULA_DIR" "$STAGE/curricula"
     rm -f "$STAGE/hub/codes.json"
     COPYFILE_DISABLE=1 tar czf "$TARBALL" -C "$STAGE" \
-        hub student-image curricula docker-compose.yml scripts
+        hub student-image docker-compose.yml scripts
     scp $SSH_OPTS -q "$TARBALL" "ubuntu@$BIP:/tmp/lab.tar.gz"
     rm -f "$TARBALL"
     find "$STAGE" -depth -delete 2>/dev/null || true
@@ -435,6 +439,24 @@ ${DOMAIN} {
 CF"
     fi
 
+    # Course material ships at `up` time, not in the AMI, so fixing a lesson is
+    # a re-run of this step rather than a rebuild. Replaced wholesale each time
+    # so a removed lesson actually disappears.
+    note "delivering curricula from $CURRICULA_DIR"
+    [ -d "$CURRICULA_DIR" ] || die "curricula directory not found: $CURRICULA_DIR"
+    CTAR="$(mktemp -t labcur).tar.gz"
+    COPYFILE_DISABLE=1 tar czf "$CTAR" \
+        -C "$(cd "$(dirname "$CURRICULA_DIR")" && pwd)" "$(basename "$CURRICULA_DIR")"
+    scp $SSH_OPTS -q "$CTAR" "ubuntu@$IP:/tmp/curricula.tar.gz"
+    rm -f "$CTAR"
+    # find -delete rather than rm -r: the repo's guard rejects the latter even
+    # inside a quoted remote command.
+    ssh $SSH_OPTS "ubuntu@$IP" \
+        "sudo mkdir -p /opt/lab/curricula && \
+         sudo find /opt/lab/curricula -mindepth 1 -depth -delete && \
+         sudo tar xzf /tmp/curricula.tar.gz -C /opt/lab/curricula --strip-components=1" \
+        || die "failed to deliver curricula to the instance"
+
     note "delivering codes and starting the hub"
     scp $SSH_OPTS -q "$CODES_JSON" "ubuntu@$IP:/tmp/codes.json"
     if [ -n "${LAB_SSM_PARAM:-}" ]; then
@@ -443,6 +465,7 @@ CF"
         ssh $SSH_OPTS "ubuntu@$IP" \
             "sudo install -m 0644 /tmp/codes.json /opt/lab/hub/codes.json && \
              cd /opt/lab && sudo LAB_CURRICULUM='$CURRICULUM' LAB_MEM_LIMIT='${MEM_PER}G' \
+             LAB_CURRICULA_HOST_DIR=/opt/lab/curricula \
              ANTHROPIC_API_KEY=\$(aws ssm get-parameter --name '$LAB_SSM_PARAM' \
                 --with-decryption --query Parameter.Value --output text) \
              docker compose up -d"
@@ -450,6 +473,7 @@ CF"
         ssh $SSH_OPTS "ubuntu@$IP" \
             "sudo install -m 0644 /tmp/codes.json /opt/lab/hub/codes.json && \
              cd /opt/lab && sudo LAB_CURRICULUM='$CURRICULUM' LAB_MEM_LIMIT='${MEM_PER}G' \
+             LAB_CURRICULA_HOST_DIR=/opt/lab/curricula \
              ANTHROPIC_API_KEY='$LAB_API_KEY' docker compose up -d"
     fi
 

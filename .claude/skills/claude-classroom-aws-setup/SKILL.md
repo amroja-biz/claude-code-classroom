@@ -1,19 +1,22 @@
 ---
 name: claude-classroom-aws-setup
-description: Set up this workshop environment in the user's AWS account — discovers their VPC, subnet and Route53 zones, asks only what cannot be inferred, writes workshop.conf, deploys the CloudFormation stack, stores the API key, and verifies. Use when the user wants to install, configure, set up, deploy or get started with this repo, or says the workshop is not working and they need to check their configuration.
+description: Set up this workshop environment in the user's AWS account — discovers their VPC, subnet and Route53 zones, asks only what cannot be inferred, and asks for user confirmation for things that can. Writes workshop.conf, deploys the CloudFormation stack, stores the Anthropic API key, and verifies. Use when the user wants to install, configure, set up, deploy or get started with this repo, or says the workshop is not working and they need to check their configuration.
 ---
 
 # Set up the workshop environment
 
 Your job is to get this repo running in the user's AWS account **without making
 them read the README or type resource IDs**. Discover what you can, ask only
-what you genuinely cannot infer, and verify each step before moving on.
+what you genuinely cannot infer, raise important issues to user for confirmation to 
+ensure your inferences do not amount to incorrect assumptions and verify each 
+step before moving on.
 
 ## Principles
 
 - **Discover, don't ask.** `./scripts/workshop discover` returns JSON describing
   their account. Use it to offer concrete choices rather than asking someone to
-  paste a VPC ID.
+  paste a VPC ID. If multiple accounts or profiles are available, you must ask the
+  user which one to use and remember it.
 - **Ask in batches, not one at a time.** Collect the open questions and put them
   in a single AskUserQuestion where the tool is available.
 - **Never print the API key.** Not in a command you run, not in a summary, not
@@ -24,6 +27,10 @@ what you genuinely cannot infer, and verify each step before moving on.
 
 ## Step 1 — Prerequisites
 
+Alert the user that they must have an AWS account with appropriate permissions, an 
+Anthropic API key, and an ssh key. Docker is required for local testing but can be bypassed if 
+the user wants to deploy directly to AWS.
+
 ```bash
 ./scripts/workshop discover
 ```
@@ -32,6 +39,37 @@ If this fails because credentials are missing or expired, tell the user to run
 `aws sso login --profile <name>` (or `aws configure`) themselves — suggest they
 type `! aws sso login --profile <name>` so the output lands in the session — and
 stop until they have.
+
+### Choose the AWS profile before anything else
+
+`discover` reports two fields: `profile`, the one it actually used, and
+`profiles`, every profile configured on the machine. The script exports a single
+`AWS_PROFILE` for every AWS call it makes, so this one choice governs the whole
+install — and an unset profile falls through to `default`, which on a
+multi-account machine is rarely the intended account.
+
+- **`profiles` has one entry, or is empty** — nothing to choose. Continue.
+- **`profiles` has several** — stop and ask. Show the list, and show which
+  account `identity` resolved to, so they can see what `default` would have
+  given them. Never pick one yourself, and never treat the `default` fallback as
+  a decision the user made.
+
+Once they choose, re-run discovery against it and use that output from here on:
+
+```bash
+AWS_PROFILE=<name> ./scripts/workshop discover
+```
+
+Record it as `LAB_AWS_PROFILE` in step 3 — that is what makes the choice stick
+for `init`, `up`, `down` and `status`.
+
+If the user exported `AWS_PROFILE` themselves before starting, `discover` has
+already picked it up. Confirm it is the account they mean rather than assuming
+the export was deliberate.
+
+**One profile, one account.** The tool cannot reach a second account, so if the
+domain's parent zone lives elsewhere, that shows up as a missing zone in step 2
+and a manual delegation in step 4. That is expected, not a failure.
 
 From the JSON, confirm:
 
@@ -50,7 +88,9 @@ Infer where possible:
 - **VPC** — if exactly one, use it. If several, ask, showing name/CIDR/default.
 - **Subnet** — leave `LAB_SUBNET_ID` empty; the tool auto-selects a public subnet
   in the security group's VPC. Only set it if they ask for a specific one.
-- **Region and profile** — take from the `discover` output.
+- **Region** — take from the `discover` output.
+- **Profile** — already settled in step 1. Do not re-derive it here; write
+  the profile the user chose into `LAB_AWS_PROFILE`.
 - **SSH key** — look for `~/.ssh/id_ed25519.pub`, then `~/.ssh/id_rsa.pub`. If
   neither exists, tell the user to run `! ssh-keygen -t ed25519` themselves.
 
@@ -132,9 +172,15 @@ make dev-up CURRICULUM=intro-agents
 Open `http://localhost:8000` and log in with a code from `hub/codes.json`. This
 proves the images and hub work before any EC2 cost. Then `make dev-down`.
 
-If the student container serves JupyterLab but Claude Code will not start,
-the image was built for the wrong architecture — `make dev-build` builds native,
-`make prod-build` builds amd64 for the AMI.
+`make dev-build` builds for the host architecture. Nothing here cross-builds:
+the AMI's images are built on the EC2 instance by `workshop build`, so they are
+always native to the box.
+
+On Apple Silicon this means local testing exercises an arm64 image while the AMI
+is amd64. Claude Code is a Bun binary that crashes under QEMU, so an emulated
+amd64 image serves JupyterLab but cannot start Claude Code. Do not try to work
+around this by cross-building — accept that this step verifies the hub, the
+spawner and the curriculum wiring, and that Claude Code itself is proven on AWS.
 
 ## Step 7 — Bake the AMI
 

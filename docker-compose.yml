@@ -23,6 +23,10 @@ services:
       HUB_CONNECT_IP: lab-hub
       LAB_MEM_LIMIT: "2G"
       LAB_CURRICULUM: "${LAB_CURRICULUM:-intro-agents}"
+      # Host path, not a path inside this container: the hub asks the host's
+      # Docker daemon to bind-mount it into each student container. On the box
+      # `workshop up` rsyncs curricula to /opt/lab/curricula and sets this.
+      LAB_CURRICULA_HOST_DIR: "${LAB_CURRICULA_HOST_DIR:-${PWD}/curricula}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
 
 networks:
