@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Workshop lifecycle.
 #
+#   workshop discover                                      what this AWS account offers (JSON)
 #   workshop init                                          deploy the durable stack
 #   workshop build                                         bake the AMI (day before)
 #   workshop size  --students N [--mem 2] [--hours 6]      what it would cost
@@ -20,10 +21,18 @@ CONF="${LAB_CONF:-workshop.conf}"
 if [ -f "$CONF" ]; then
     # shellcheck disable=SC1090
     . "$CONF"
-elif [ -f workshop.conf.example ]; then
-    echo "error: $CONF not found. Copy it and edit:" >&2
-    echo "    cp workshop.conf.example workshop.conf" >&2
-    exit 1
+else
+    # `discover` and `help` must work on a fresh clone -- discover is what you
+    # run to find out what to put IN the config, so requiring it is circular.
+    case "${1:-help}" in
+        discover|help|-h|--help) ;;
+        *)
+            echo "error: $CONF not found. Copy it and edit:" >&2
+            echo "    cp workshop.conf.example workshop.conf" >&2
+            echo "  or run /setup in Claude Code to do it for you." >&2
+            exit 1
+            ;;
+    esac
 fi
 
 STACK="${LAB_STACK:-ai-agents-lab-durable}"
@@ -99,6 +108,32 @@ require_students() {
 }
 
 case "$SUB" in
+
+discover)
+    # Machine-readable inventory of what this AWS account offers, so the setup
+    # skill can present choices instead of asking a human to type resource IDs.
+    # Runs before workshop.conf exists, so it must not depend on it.
+    echo "{"
+    printf '  "identity": %s,\n' "$(aws sts get-caller-identity --output json 2>/dev/null || echo null)"
+    printf '  "region": "%s",\n' "$AWS_REGION"
+    printf '  "profile": "%s",\n' "$AWS_PROFILE"
+    printf '  "vpcs": %s,\n' "$(aws ec2 describe-vpcs \
+        --query 'Vpcs[].{id:VpcId,cidr:CidrBlock,default:IsDefault,name:Tags[?Key==`Name`]|[0].Value}' \
+        --output json 2>/dev/null || echo '[]')"
+    printf '  "public_subnets": %s,\n' "$(aws ec2 describe-subnets \
+        --filters 'Name=map-public-ip-on-launch,Values=true' \
+        --query 'Subnets[].{id:SubnetId,vpc:VpcId,az:AvailabilityZone}' \
+        --output json 2>/dev/null || echo '[]')"
+    printf '  "hosted_zones": %s,\n' "$(aws route53 list-hosted-zones \
+        --query 'HostedZones[?Config.PrivateZone==`false`].{id:Id,name:Name}' \
+        --output json 2>/dev/null || echo '[]')"
+    printf '  "stack": "%s",\n' "$(aws cloudformation describe-stacks --stack-name "$STACK" \
+        --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NONE)"
+    printf '  "tools": {"docker": %s, "aws": "%s"}\n' \
+        "$(command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && echo true || echo false)" \
+        "$(aws --version 2>&1 | cut -d" " -f1)"
+    echo "}"
+    ;;
 
 init)
     # Deploy the durable stack from workshop.conf, so the README is one command

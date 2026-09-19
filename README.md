@@ -31,36 +31,48 @@ hand out codes.
 
 ## Setup
 
+Open this repo in Claude Code (or any coding agent that reads
+`.claude/skills/`) and run:
+
+```
+/setup
+```
+
+It inspects your AWS account, offers choices instead of asking for resource IDs,
+asks only what it cannot infer, writes the config, deploys the stack, walks you
+through DNS delegation if needed, and verifies each step. The API key is handled
+so that it never passes through the agent.
+
+<details>
+<summary><b>Manual setup, if you would rather not</b></summary>
+
 Needs an AWS account with a VPC and public subnet, a Route53 domain, `aws` CLI
 v2, Docker, and an Anthropic API key.
 
 ```bash
 cp workshop.conf.example workshop.conf && $EDITOR workshop.conf
-```
-
-`workshop.conf` is gitignored and holds everything account-specific: domain,
-hosted zone, profile, region, VPC, SSH key, stack name, curricula directory, and
-where the API key comes from. Each setting is commented in the example.
-
-Then deploy the durable resources — security group, IAM role, key pair and DNS:
-
-```bash
 ./scripts/workshop init
 ```
 
-That reads `workshop.conf`, so there is nothing to retype. If you set
-`LAB_HOSTED_ZONE_ID` to a Route53 zone you already own in this account, the stack
-writes records into it. Leave it empty and the stack creates a zone for the
-subdomain instead, printing the nameservers to delegate from the parent — the
-path to use when the parent domain lives in a different AWS account.
+`workshop.conf` is gitignored and holds everything account-specific; each
+setting is commented in the example. `./scripts/workshop discover` prints what
+your account offers, which is useful when filling it in.
 
-Finally store the API key where the instance can fetch it under its own IAM role,
-rather than you handling it on every `up`:
+`init` deploys the durable resources — security group, IAM role, key pair, DNS —
+about $0.50/month. Set `LAB_HOSTED_ZONE_ID` to a Route53 zone you already own in
+this account and the stack writes records into it. Leave it empty and the stack
+creates a zone for the subdomain instead, printing nameservers to delegate from
+the parent — the path to use when the parent domain lives in a different AWS
+account.
+
+Then store the API key where the instance fetches it under its own IAM role:
 
 ```bash
 aws ssm put-parameter --name /ai-agents-lab/anthropic-api-key \
   --type SecureString --value 'sk-ant-...'
 ```
+
+</details>
 
 ## Run a workshop
 
