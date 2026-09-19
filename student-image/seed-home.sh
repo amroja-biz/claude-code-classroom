@@ -90,7 +90,7 @@ if [ -f "${HOME_DIR}/.lab-bashrc" ] && ! grep -q '.lab-bashrc' "${HOME_DIR}/.bas
 fi
 
 # --- Claude Code state -------------------------------------------------------
-# Derived from geneontology/go-jupyter (BSD 3-Clause) -- see NOTICE.
+# This seeding came from geneontology/go-jupyter -- see NOTICE.
 #
 # Every field here suppresses a prompt that would otherwise stop a non-technical
 # student cold. customApiKeyResponses is the load-bearing one: with

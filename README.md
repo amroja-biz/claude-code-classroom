@@ -323,10 +323,11 @@ requirements, that context carried between exercises triggers compaction, and
 that model API spend dwarfs infrastructure cost by roughly 50x. Those are
 expensive lessons to learn from a live room, and they published them.
 
-About 6% of this project's code is derived from theirs — principally the Claude
-Code first-run state seeding — and remains under its BSD 3-Clause License. See
-[NOTICE](NOTICE) for exactly which parts and how that was measured.
+The Claude Code first-run state seeding came from them more or less intact.
+Everything else here — the container-per-student spawner, code authentication,
+curriculum system, CloudFormation, lifecycle scripts and tests — is new. See
+[NOTICE](NOTICE).
 
 ## License
 
-MIT — see [LICENSE](LICENSE), and [NOTICE](NOTICE) for the derived portions.
+MIT — see [LICENSE](LICENSE).
