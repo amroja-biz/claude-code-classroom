@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 
 Description: >
-  Durable infrastructure for the AI Agents lab. These resources persist between
+  Durable infrastructure for Claude Code Classroom. These resources persist between
   workshops and cost roughly $0.50/month (the hosted zone; everything else is
   free). The EC2 instance itself is deliberately NOT here -- it is created and
   destroyed by scripts/workshop, because "exists on workshop days" is not a
@@ -50,7 +50,7 @@ Parameters:
     Default: ""
     Description: >
       Optional. SSM Parameter Store path holding the Anthropic API key as a
-      SecureString, e.g. /ai-agents-lab/anthropic-api-key. When set, the
+      SecureString, e.g. /claude-classroom/anthropic-api-key. When set, the
       instance fetches the key itself and it never leaves AWS. Leave empty to
       supply the key from the operator's machine instead.
 
@@ -67,18 +67,18 @@ Resources:
     Properties:
       Name: !Ref DomainName
       HostedZoneConfig:
-        Comment: !Sub "AI Agents lab - ${DomainName}"
+        Comment: !Sub "Claude Code Classroom - ${DomainName}"
 
   KeyPair:
     Type: AWS::EC2::KeyPair
     Properties:
-      KeyName: ai-agents-lab
+      KeyName: claude-classroom
       PublicKeyMaterial: !Ref SshPublicKey
 
   SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: AI Agents lab workshop instance
+      GroupDescription: Claude Code Classroom workshop instance
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         # Caddy serves 443; 80 is required for the Let's Encrypt HTTP-01
@@ -102,7 +102,7 @@ Resources:
       # its container; this security group is what keeps it off the internet.
       Tags:
         - Key: Name
-          Value: ai-agents-lab
+          Value: claude-classroom
 
   InstanceRole:
     Type: AWS::IAM::Role
@@ -161,7 +161,7 @@ Outputs:
     Description: Zone the workshop A record is written to.
     Value: !If [CreateZone, !Ref HostedZone, !Ref ExistingHostedZoneId]
     Export:
-      Name: ai-agents-lab-zone-id
+      Name: claude-classroom-zone-id
   NameServers:
     Condition: CreateZone
     Description: >
@@ -172,16 +172,16 @@ Outputs:
   DomainName:
     Value: !Ref DomainName
     Export:
-      Name: ai-agents-lab-domain
+      Name: claude-classroom-domain
   SecurityGroupId:
     Value: !Ref SecurityGroup
     Export:
-      Name: ai-agents-lab-sg
+      Name: claude-classroom-sg
   InstanceProfileName:
     Value: !Ref InstanceProfile
     Export:
-      Name: ai-agents-lab-instance-profile
+      Name: claude-classroom-instance-profile
   KeyPairName:
     Value: !Ref KeyPair
     Export:
-      Name: ai-agents-lab-keypair
+      Name: claude-classroom-keypair

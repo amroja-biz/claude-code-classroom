@@ -29,8 +29,8 @@ LAB_SSH_PUBLIC_KEY=~/.ssh/id_ed25519.pub
 
 # CloudFormation stack and resource tag. Change both to run more than one
 # independent lab in the same account.
-LAB_STACK=ai-agents-lab-durable
-LAB_TAG=ai-agents-lab
+LAB_STACK=claude-classroom-durable
+LAB_TAG=claude-classroom
 
 # Where curricula are read from. Point this at a private directory or repo to
 # keep course content out of this repository.
@@ -40,7 +40,7 @@ LAB_CURRICULA_DIR=./curricula
 #
 # Recommended: an SSM Parameter Store SecureString. The instance fetches it
 # under its own IAM role, so the key never sits on your machine.
-#   aws ssm put-parameter --name /ai-agents-lab/anthropic-api-key \
+#   aws ssm put-parameter --name /claude-classroom/anthropic-api-key \
 #       --type SecureString --value 'sk-ant-...'
 LAB_SSM_PARAM=
 

@@ -18,7 +18,7 @@ if [ -r "$HOME/.lab-welcome" ]; then
     # Curriculum-supplied welcome text (curricula/<name>/welcome.txt).
     sed 's/^/  /' "$HOME/.lab-welcome"
 else
-    echo "   AI Agents Lab"
+    echo "   Claude Code Classroom"
     echo ""
     echo "   Your lessons are in  ~/lessons"
 fi

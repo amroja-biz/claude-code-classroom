@@ -29,14 +29,14 @@ else
         *)
             echo "error: $CONF not found. Copy it and edit:" >&2
             echo "    cp workshop.conf.example workshop.conf" >&2
-            echo "  or run /claude-class-aws-setup in Claude Code to do it for you." >&2
+            echo "  or run /claude-classroom-aws-setup in Claude Code to do it for you." >&2
             exit 1
             ;;
     esac
 fi
 
-STACK="${LAB_STACK:-ai-agents-lab-durable}"
-TAG_NAME="${LAB_TAG:-ai-agents-lab}"
+STACK="${LAB_STACK:-claude-classroom-durable}"
+TAG_NAME="${LAB_TAG:-claude-classroom}"
 CURRICULA_DIR="${LAB_CURRICULA_DIR:-./curricula}"
 AWS_PROFILE="${AWS_PROFILE:-${LAB_AWS_PROFILE:-default}}"
 export AWS_PROFILE
@@ -268,7 +268,7 @@ build)
     STAMP="$(date -u +%Y%m%d-%H%M%S)"
     note "creating AMI"
     AMI_NEW="$(aws ec2 create-image --instance-id "$BID" --name "${TAG_NAME}-${STAMP}" \
-        --description "AI Agents lab $STAMP" \
+        --description "Claude Code Classroom $STAMP" \
         --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=$TAG_NAME}]" \
         --query 'ImageId' --output text)"
 

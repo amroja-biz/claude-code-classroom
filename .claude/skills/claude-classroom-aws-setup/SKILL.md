@@ -1,5 +1,5 @@
 ---
-name: claude-class-aws-setup
+name: claude-classroom-aws-setup
 description: Set up this workshop environment in the user's AWS account — discovers their VPC, subnet and Route53 zones, asks only what cannot be inferred, writes workshop.conf, deploys the CloudFormation stack, stores the API key, and verifies. Use when the user wants to install, configure, set up, deploy or get started with this repo, or says the workshop is not working and they need to check their configuration.
 ---
 
@@ -109,13 +109,13 @@ Tell them to run it themselves, using the `!` prefix so it executes in their
 session and never passes through you:
 
 ```
-! aws ssm put-parameter --name /ai-agents-lab/anthropic-api-key --type SecureString --value 'sk-ant-...' --profile <their-profile>
+! aws ssm put-parameter --name /claude-classroom/anthropic-api-key --type SecureString --value 'sk-ant-...' --profile <their-profile>
 ```
 
 Then verify without revealing the value:
 
 ```bash
-aws ssm get-parameter --name /ai-agents-lab/anthropic-api-key --with-decryption --query 'Parameter.Value' --output text | wc -c
+aws ssm get-parameter --name /claude-classroom/anthropic-api-key --with-decryption --query 'Parameter.Value' --output text | wc -c
 ```
 
 A plausible length confirms it. Also remind them, once and plainly, to set a

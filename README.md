@@ -1,4 +1,4 @@
-# claude-code-class-environment-aws
+# Claude Code Classroom
 
 A disposable workshop environment for teaching people to work with AI agents.
 Students open a URL, enter a code from their handout, and land in a browser
@@ -35,7 +35,7 @@ Open this repo in Claude Code (or any coding agent that reads
 `.claude/skills/`) and run:
 
 ```
-/claude-class-aws-setup
+/claude-classroom-aws-setup
 ```
 
 It inspects your AWS account, offers choices instead of asking for resource IDs,
@@ -68,7 +68,7 @@ account.
 Then store the API key where the instance fetches it under its own IAM role:
 
 ```bash
-aws ssm put-parameter --name /ai-agents-lab/anthropic-api-key \
+aws ssm put-parameter --name /claude-classroom/anthropic-api-key \
   --type SecureString --value 'sk-ant-...'
 ```
 

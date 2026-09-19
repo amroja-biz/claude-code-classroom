@@ -1,4 +1,4 @@
-"""JupyterHub for the AI Agents lab.
+"""JupyterHub for Claude Code Classroom.
 
 The hub runs in a container and spawns one sibling container per student via the
 mounted Docker socket. Students authenticate with a code handed out on paper;

@@ -40,7 +40,7 @@ echo "== login page =="
 code="$(curl -sS $INSECURE --max-time 20 -c "$JAR" -b "$JAR" "$BASE/hub/login" \
         -o /tmp/live-login.html -w '%{http_code}' 2>/dev/null)"
 [ "$code" = "200" ] && pass "HTTP 200" || fail "HTTP $code"
-grep -q 'AI Agents Lab' /tmp/live-login.html && pass "custom template served" || fail "stock template"
+grep -q 'Claude Code Classroom' /tmp/live-login.html && pass "custom template served" || fail "stock template"
 grep -q 'Enter the code from your handout' /tmp/live-login.html \
     && pass "single-field login" || fail "wrong login form"
 

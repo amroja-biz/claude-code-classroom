@@ -1,4 +1,4 @@
-# AWS Lab Creator for AI Agents — Specification
+# Claude Code Classroom — Specification
 
 Status: **platform verified locally; AWS lifecycle implemented, under test on real AWS**
 Date: 2026-09-18
