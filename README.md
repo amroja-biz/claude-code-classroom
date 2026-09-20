@@ -159,6 +159,24 @@ workshop is fixable. Students get `~/lessons` (read-only material) and `~/work`
 `LAB_CURRICULA_DIR` outside this repo to keep your content private; the two here
 are examples.
 
+### Writing your own
+
+Open this repo in Claude Code and ask it:
+
+> Use the `claude-classroom-new-curriculum` skill to scaffold a curriculum
+
+It asks where the material should live, creates the layout with placeholder
+files, and gives you the `workshop up` command for it. It writes structure only —
+the lessons are yours to write.
+
+Two things worth knowing before you start, because neither fails loudly:
+
+- `LAB_CURRICULA_DIR` is the **parent** directory holding curriculum
+  directories, not one curriculum. Set one level too deep and `up` succeeds
+  while every student gets the wrong material.
+- `--curriculum` is not checked against what exists. A typo falls back to the
+  alphabetically-first curriculum, and says so only in a container log.
+
 ## Changing this repo
 
 Running a workshop needs nothing on your machine but the AWS CLI. If you want to
