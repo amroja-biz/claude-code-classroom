@@ -37,9 +37,33 @@ LAB_INSTANCE_TABLE=(
 # Reserved for the host: OS, Docker daemon, JupyterHub container, Caddy.
 LAB_HOST_OVERHEAD_GIB="${LAB_HOST_OVERHEAD_GIB:-4}"
 
-# lab_required_gib <students> <gib-per-student>
+# A mem_limit is a CEILING, not a reservation. Provisioning as though every
+# student simultaneously pegs their cap is what used to pick an instance the
+# cohort fit into exactly, with nothing spare. A published workshop measured
+# ~0.5 GiB per student against a 2 GiB cap, so planning at half the cap is still
+# twice observed usage, and the cap stays where it is to stop one runaway agent
+# hurting anyone else.
+LAB_PLAN_PERCENT="${LAB_PLAN_PERCENT:-50}"
+
+# An instance advertised as 64 GiB does not give the OS 64 GiB -- firmware and
+# the kernel reserve a few percent. Comparing against the nominal figure is how
+# a cohort that "exactly fits" fails to fit on the actual box.
+LAB_USABLE_PERCENT="${LAB_USABLE_PERCENT:-95}"
+
+# Slack required on top of the plan. Without it the picker will happily choose a
+# box where usable memory equals the requirement to the gigabyte, which leaves
+# nothing for the planning assumptions themselves being a little wrong.
+LAB_HEADROOM_PERCENT="${LAB_HEADROOM_PERCENT:-10}"
+
+# lab_required_gib <students> <gib-per-student-cap>
+# What we provision for: a fraction of the cap, plus the host's own needs.
 lab_required_gib() {
-    echo $(( $1 * $2 + LAB_HOST_OVERHEAD_GIB ))
+    echo $(( ($1 * $2 * LAB_PLAN_PERCENT + 99) / 100 + LAB_HOST_OVERHEAD_GIB ))
+}
+
+# lab_usable_gib <nominal-gib>
+lab_usable_gib() {
+    echo $(( $1 * LAB_USABLE_PERCENT / 100 ))
 }
 
 # lab_pick_instance <students> <gib-per-student>
@@ -51,13 +75,13 @@ lab_pick_instance() {
     local row type vcpu gib price
     for row in "${LAB_INSTANCE_TABLE[@]}"; do
         IFS=: read -r type vcpu gib price <<<"$row"
-        if [ "$gib" -ge "$need" ]; then
+        if [ $(( $(lab_usable_gib "$gib") * 100 )) -ge $(( need * (100 + LAB_HEADROOM_PERCENT) )) ]; then
             echo "$type $vcpu $gib $price"
             return 0
         fi
     done
 
-    echo "no single instance fits ${students} students x ${per} GiB + ${LAB_HOST_OVERHEAD_GIB} GiB host = ${need} GiB." >&2
+    echo "no single instance fits ${students} students: ${need} GiB needed (${per} GiB cap x ${LAB_PLAN_PERCENT}% + ${LAB_HOST_OVERHEAD_GIB} GiB host)." >&2
     echo "Run multiple independent stacks and encode the box in the login code (box2-blue-otter)." >&2
     return 1
 }
@@ -80,17 +104,31 @@ t = $price * $hours + 0.08 * $disk / 730 * $hours + 0.005 * $hours
 print('under \$1' if t < 1 else '~\$%d' % round(t))
 ")"
 
+    local need usable
+    need="$(lab_required_gib "$students" "$per")"
+    usable="$(lab_usable_gib "$gib")"
+
     cat <<EOF
   students          ${students}
-  memory per seat   ${per} GiB  (cgroup cap per container)
-  host overhead     ${LAB_HOST_OVERHEAD_GIB} GiB
-  required          $(lab_required_gib "$students" "$per") GiB
-  root volume       ${disk} GiB
+  per-seat cap      ${per} GiB      a container is OOM-killed above this
+  planned at        ${LAB_PLAN_PERCENT}% of cap    caps are ceilings, not reservations
+  host overhead     ${LAB_HOST_OVERHEAD_GIB} GiB      OS, Docker, JupyterHub, Caddy
+  required          ${need} GiB
 
-  instance          ${type}  (${vcpu} vCPU, ${gib} GiB)
-  headroom          $(( gib - $(lab_required_gib "$students" "$per") )) GiB
+  instance          ${type}  (${vcpu} vCPU, ${gib} GiB nominal)
+  usable memory     ${usable} GiB     nominal less $(( 100 - LAB_USABLE_PERCENT ))% firmware/kernel reserve
+  headroom          $(( usable - need )) GiB
 
-  cost for ${hours}h     ${rough}
+  root volume       ${disk} GiB    destroyed at 'down'
+  cost for ${hours}h       ${rough}
+
+  Why this one: the smallest r7i whose usable memory clears ${need} GiB.
+  Planning at ${LAB_PLAN_PERCENT}% of the cap because a published workshop measured about
+  0.5 GiB per student against a 2 GiB cap. The cap still protects the class:
+  one runaway agent is killed in its own cgroup, not on the host.
+
+  To change it:  --instance-type <type>     pick the box yourself
+                 --mem <GiB>                change the per-seat cap
 
   Cost is indicative only (us-east-1 on-demand, 2026-09-18).
   Check AWS pricing for your region.

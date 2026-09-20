@@ -74,12 +74,25 @@ LAB_CURRICULA_DIR=./curricula
 # SIZING -- rarely changed. `workshop size --students N` shows their effect.
 # =============================================================================
 
-# RAM held back for the host itself (Docker, the hub, Caddy) when choosing an
-# instance. Students get their own cgroup caps on top of this and cannot swap,
-# so this is the number protecting the box from its own overhead. The instance
-# also carries a 4 GiB swapfile as a fallback. If `workshop status` shows the
-# host running tight during a real class, raise this rather than adding swap.
+# `workshop size --students N` explains every number below and shows which
+# instance they produce. You should not need to touch any of them.
+
+# RAM held back for the host itself (Docker, the hub, Caddy). The instance also
+# carries a 4 GiB swapfile as a fallback. If `workshop status` shows the host
+# running tight during a real class, raise this rather than adding swap.
 #LAB_HOST_OVERHEAD_GIB=4
+
+# What fraction of each student's cap to provision for. A cap is a ceiling, not
+# a reservation: a published workshop measured ~0.5 GiB per student against a
+# 2 GiB cap, so 50% is still twice observed usage. Raise it if your exercises
+# are unusually memory-hungry; the cap itself is --mem.
+#LAB_PLAN_PERCENT=50
+
+# An instance advertised as 64 GiB gives the OS less than that. Sizing compares
+# against this fraction of nominal, then requires the headroom below on top, so
+# a cohort is never squeezed into a box it only just fits.
+#LAB_USABLE_PERCENT=95
+#LAB_HEADROOM_PERCENT=10
 
 # Root volume sizing: base + per-student, floored. Sized for tool caches (uv,
 # pip, npm), not for authored files. The volume is destroyed at `down`.

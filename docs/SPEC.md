@@ -413,7 +413,7 @@ destroyed, which is the primary control.
 |---|---|---|
 | Instance dies mid-workshop | Whole class down | Rebuild from AMI, ~3 min. Accepted risk. |
 | A student exhausts memory | That container OOM-killed only | `mem_limit = 2G`, and `memswap_limit = mem_limit` so it cannot swap its way into thrashing the box |
-| The host itself runs short | Class stops | 4 GiB reserved in sizing, plus a 4 GiB host swapfile as a fallback; `workshop status` reports live headroom |
+| The host itself runs short | Class stops | Sizing provisions for 50% of the per-seat cap plus 4 GiB host, compares against usable rather than nominal memory, and requires 10% slack on top; a 4 GiB host swapfile backs it, and `workshop status` reports live headroom |
 | More students spawn than the box was sized for | Class stops | `active_server_limit = --students`; the extra login is refused, the running cohort is unaffected |
 | Instance type does not match the AMI's architecture | `run-instances` fails with an unrelated-looking error | `up` compares both and refuses before any DNS or billing |
 | Let's Encrypt rate limit | No valid cert | Staging endpoint during development |

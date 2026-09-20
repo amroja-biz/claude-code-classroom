@@ -398,7 +398,11 @@ up)
         note "instance type overridden: $INSTANCE_TYPE"
     else
         read -r INSTANCE_TYPE _ _ _ <<<"$(lab_pick_instance "$STUDENTS" "$MEM_PER")"
-        note "derived instance type for $STUDENTS students: $INSTANCE_TYPE"
+        # Show the reasoning, not just the answer: the operator is about to be
+        # billed for this choice and should be able to disagree with it.
+        echo
+        lab_size_report "$STUDENTS" "$MEM_PER" "$HOURS"
+        echo
     fi
 
     [ -z "$(running_instance)" ] || die "a workshop instance is already running; 'workshop down' first"
