@@ -7,8 +7,14 @@
 #
 # The r7i family prices linearly -- checked against the AWS Pricing API on
 # 2026-09-18 in us-east-1, where every size from large to 12xlarge cost $0.00827
-# per GiB-hour. So there is no cost advantage to any particular size, and the
-# only thing that matters is picking the smallest box the cohort fits in.
+# per GiB-hour.
+#
+# That linearity is the whole argument for erring large. One size up costs
+# single-digit dollars for a day of teaching; one size down costs thirty people
+# their afternoon and the instructor their credibility. There is no exchange
+# rate at which that trade is worth taking, so this picks the smallest box that
+# clears the requirement WITH margin -- it does not try to find the cheapest
+# box the cohort can be squeezed into. See PRINCIPLES.md: 2 beats 3.
 #
 # These prices are INDICATIVE, not authoritative. They vary by region and change
 # over time. They exist so `workshop size` can give a sense of scale; nothing
@@ -37,13 +43,67 @@ LAB_INSTANCE_TABLE=(
 # Reserved for the host: OS, Docker daemon, JupyterHub container, Caddy.
 LAB_HOST_OVERHEAD_GIB="${LAB_HOST_OVERHEAD_GIB:-4}"
 
-# A mem_limit is a CEILING, not a reservation. Provisioning as though every
-# student simultaneously pegs their cap is what used to pick an instance the
-# cohort fit into exactly, with nothing spare. A published workshop measured
-# ~0.5 GiB per student against a 2 GiB cap, so planning at half the cap is still
-# twice observed usage, and the cap stays where it is to stop one runaway agent
-# hurting anyone else.
-LAB_PLAN_PERCENT="${LAB_PLAN_PERCENT:-50}"
+# What one seat actually uses at peak, in MiB. THE BOX IS SIZED FROM THIS, not
+# from the cap.
+#
+# Sizing used to be "a fixed percentage of the per-seat cap", which coupled two
+# numbers that are not related. The cap is deliberately set well above real
+# usage, so a percentage of it only lands in the right place while that gap
+# happens to hold. Set the cap near true peak -- exactly what a careful
+# operator does -- and the same formula silently picked a box the class could
+# exhaust. Nothing checked it and nothing said so.
+#
+# Cap and box now answer their own questions:
+#   cap (--mem)  "when do we kill ONE student?"   -> recoverable, one person
+#   box size     "when does the HOST die?"        -> unrecoverable, everyone
+#
+# Measured 2026-09-20, one seat, whole container, cgroup v2 memory.peak (the
+# kernel's own high-water mark -- sampling `docker stats` at 2s missed the true
+# peak by 22%):
+#
+#   idle JupyterLab                      154 MiB
+#   + Claude Code open, idle             301 MiB
+#   Claude reasoning, no execution       482 MiB
+#   Claude executing a toolchain build  1036 MiB   <- this figure
+#
+# Anon (unreclaimable) stayed at 246 MiB throughout; the rest is reclaimable
+# page cache, and page cache is SHARED between seats, so N x this figure
+# overstates a real cohort. Erring high is the intended direction.
+#
+# NOT measured: a full course, a long-lived session whose context grows until
+# compaction, and any degree of concurrency. Override when you have measured
+# your own material -- scripts/test-containment.sh shows how to read the number.
+# Was this supplied by the operator, or is it our own figure? The difference
+# decides what happens when the cap moves -- see lab_effective_peak_mib.
+LAB_PEAK_MIB_SET="${LAB_PEAK_MIB:+yes}"
+LAB_PEAK_MIB="${LAB_PEAK_MIB:-1024}"
+
+# The cap our measurement was taken against. The 1024 MiB figure describes a
+# seat running under a 2 GiB cap; it is not a universal constant.
+LAB_MEASURED_AT_CAP_GIB="${LAB_MEASURED_AT_CAP_GIB:-2}"
+
+# lab_effective_peak_mib <cap-gib>
+# What to size from, given the cap in force.
+#
+# Raising --mem is an operator saying "my seats need more than the default".
+# Sizing from a measurement taken against the DEFAULT cap would silently ignore
+# that and hand them the same box -- the measurement simply does not describe
+# their material. But planning at the cap for everyone would throw away a real
+# measurement and double the default box for no reason.
+#
+# So: trust a measurement when there is one, use ours while the cap it was
+# taken against still holds, and otherwise fall back to the only safe
+# assumption available -- that a seat may use what the cap allows it to.
+lab_effective_peak_mib() {
+    local cap_gib="$1"
+    if [ -n "$LAB_PEAK_MIB_SET" ]; then
+        echo "$LAB_PEAK_MIB"                      # operator measured their own
+    elif [ "$cap_gib" = "$LAB_MEASURED_AT_CAP_GIB" ]; then
+        echo "$LAB_PEAK_MIB"                      # our measurement still applies
+    else
+        echo $(( cap_gib * 1024 ))                # no measurement: plan at the cap
+    fi
+}
 
 # An instance advertised as 64 GiB does not give the OS 64 GiB -- firmware and
 # the kernel reserve a few percent. Comparing against the nominal figure is how
@@ -55,10 +115,17 @@ LAB_USABLE_PERCENT="${LAB_USABLE_PERCENT:-95}"
 # nothing for the planning assumptions themselves being a little wrong.
 LAB_HEADROOM_PERCENT="${LAB_HEADROOM_PERCENT:-10}"
 
-# lab_required_gib <students> <gib-per-student-cap>
-# What we provision for: a fraction of the cap, plus the host's own needs.
+# lab_required_gib <students> <peak-mib-per-student>
+# What we provision for: every seat at its MEASURED peak simultaneously, plus
+# the host's own needs.
+#
+# Full concurrency is deliberate and is not the discredited "cap x N" mistake.
+# A taught class runs the same step at the same moment -- thirty people hit the
+# heavy cell inside the same half-minute -- so for the peak of a given exercise
+# the concurrency factor really is ~1. What was wrong before was applying that
+# to the inflated CAP; applying it to measured usage is just honest.
 lab_required_gib() {
-    echo $(( ($1 * $2 * LAB_PLAN_PERCENT + 99) / 100 + LAB_HOST_OVERHEAD_GIB ))
+    echo $(( ($1 * $2 + 1023) / 1024 + LAB_HOST_OVERHEAD_GIB ))
 }
 
 # lab_usable_gib <nominal-gib>
@@ -66,10 +133,10 @@ lab_usable_gib() {
     echo $(( $1 * LAB_USABLE_PERCENT / 100 ))
 }
 
-# lab_pick_instance <students> <gib-per-student>
+# lab_pick_instance <students> [peak-mib-per-student]
 # Prints "type vcpu gib usd_per_hour", or exits 1 if the cohort doesn't fit.
 lab_pick_instance() {
-    local students="$1" per="$2" need
+    local students="$1" per="${2:-$LAB_PEAK_MIB}" need
     need="$(lab_required_gib "$students" "$per")"
 
     local row type vcpu gib price
@@ -81,15 +148,24 @@ lab_pick_instance() {
         fi
     done
 
-    echo "no single instance fits ${students} students: ${need} GiB needed (${per} GiB cap x ${LAB_PLAN_PERCENT}% + ${LAB_HOST_OVERHEAD_GIB} GiB host)." >&2
+    echo "no single instance fits ${students} students: ${need} GiB needed (${per} MiB measured peak x ${students} + ${LAB_HOST_OVERHEAD_GIB} GiB host)." >&2
     echo "Run multiple independent stacks and encode the box in the login code (box2-blue-otter)." >&2
     return 1
 }
 
-# lab_size_report <students> <gib-per-student> <hours>
+# lab_size_report <students> <gib-per-seat-cap> <hours>
+# The cap is reported, not used to size. Sizing comes from LAB_PEAK_MIB.
 lab_size_report() {
-    local students="$1" per="$2" hours="$3" picked
-    picked="$(lab_pick_instance "$students" "$per")" || return 1
+    local students="$1" cap="$2" hours="$3" picked peak basis
+    peak="$(lab_effective_peak_mib "$cap")"
+    if [ -n "$LAB_PEAK_MIB_SET" ]; then
+        basis="measured by you (LAB_PEAK_MIB)"
+    elif [ "$cap" = "$LAB_MEASURED_AT_CAP_GIB" ]; then
+        basis="measured at the default ${cap} GiB cap"
+    else
+        basis="the cap itself -- no measurement for a ${cap} GiB cap"
+    fi
+    picked="$(lab_pick_instance "$students" "$peak")" || return 1
 
     local type vcpu gib price
     read -r type vcpu gib price <<<"$picked"
@@ -104,16 +180,29 @@ t = $price * $hours + 0.08 * $disk / 730 * $hours + 0.005 * $hours
 print('under \$1' if t < 1 else '~\$%d' % round(t))
 ")"
 
-    local need usable
-    need="$(lab_required_gib "$students" "$per")"
+    local need usable capsum oversub
+    need="$(lab_required_gib "$students" "$peak")"
     usable="$(lab_usable_gib "$gib")"
+    # If every seat pegged its cap at once. This is EXPECTED to exceed usable
+    # memory -- caps are ceilings and the cohort is deliberately oversubscribed
+    # against them. It is printed because the previous formula left exactly
+    # this fact unstated, and silent oversubscription is what PRINCIPLES rules
+    # out. Seeing "3.0x" is normal; seeing it is the point.
+    capsum=$(( students * cap ))
+    oversub="$(python3 -c "
+r = $capsum / max($usable, 1)
+print('%.1fx usable memory -- expected; caps are ceilings' % r if r >= 1.0
+      else 'fits usable memory even if every seat pegged its cap')")"
 
     cat <<EOF
   students          ${students}
-  per-seat cap      ${per} GiB      a container is OOM-killed above this
-  planned at        ${LAB_PLAN_PERCENT}% of cap    caps are ceilings, not reservations
+  sized from        ${peak} MiB   per seat, whole container
+  basis             ${basis}
   host overhead     ${LAB_HOST_OVERHEAD_GIB} GiB      OS, Docker, JupyterHub, Caddy
-  required          ${need} GiB
+  required          ${need} GiB     every seat at peak, at the same moment
+
+  per-seat cap      ${cap} GiB      a container is OOM-killed above this
+  if all capped     ${capsum} GiB     ${oversub}
 
   instance          ${type}  (${vcpu} vCPU, ${gib} GiB nominal)
   usable memory     ${usable} GiB     nominal less $(( 100 - LAB_USABLE_PERCENT ))% firmware/kernel reserve
@@ -122,13 +211,18 @@ print('under \$1' if t < 1 else '~\$%d' % round(t))
   root volume       ${disk} GiB    destroyed at 'down'
   cost for ${hours}h       ${rough}
 
-  Why this one: the smallest r7i whose usable memory clears ${need} GiB.
-  Planning at ${LAB_PLAN_PERCENT}% of the cap because a published workshop measured about
-  0.5 GiB per student against a 2 GiB cap. The cap still protects the class:
-  one runaway agent is killed in its own cgroup, not on the host.
+  Why this one: the smallest r7i whose usable memory clears ${need} GiB with
+  ${LAB_HEADROOM_PERCENT}% to spare. Sized from measured peak usage, not from the cap -- the
+  cap is deliberately well above real usage, so sizing from it tracked a
+  number chosen for a different purpose.
+
+  The cap is what still protects the class: one runaway agent is killed in its
+  own cgroup, not on the host. Disk, CPU and process count are capped per seat
+  too -- see scripts/test-containment.sh, which proves all four every run.
 
   To change it:  --instance-type <type>     pick the box yourself
                  --mem <GiB>                change the per-seat cap
+                 LAB_PEAK_MIB=<MiB>         after measuring YOUR material
 
   Cost is indicative only (us-east-1 on-demand, 2026-09-18).
   Check AWS pricing for your region.

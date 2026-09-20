@@ -90,11 +90,19 @@ LAB_CURRICULA_DIR=./curricula
 # RAM held back for the host itself (Docker, the hub, Caddy).
 #LAB_HOST_OVERHEAD_GIB=4
 
-# What fraction of each student's cap to provision for. A cap is a ceiling, not
-# a reservation: a published workshop measured ~0.5 GiB per student against a
-# 2 GiB cap, so 50% is still twice observed usage. Raise it if your exercises
-# are unusually memory-hungry; the cap itself is --mem.
-#LAB_PLAN_PERCENT=50
+# Measured peak memory of ONE seat, in MiB. This is what the instance size is
+# derived from -- not the per-seat cap, which is a ceiling set deliberately
+# above real usage.
+#
+# The default, 1024, was measured on this project's reference exercise: a seat
+# running Claude Code through a toolchain install and build peaked at 1036 MiB
+# for the whole container. It describes that material, not yours.
+#
+# Set this once you have measured your own course and the number will be used
+# as-is. Leave it unset and the default applies only while --mem is at its own
+# default; raise --mem without setting this and sizing falls back to planning
+# at the cap, because no measurement exists for a cap that size.
+#LAB_PEAK_MIB=1024
 
 # An instance advertised as 64 GiB gives the OS less than that. Sizing compares
 # against this fraction of nominal, then requires the headroom below on top, so

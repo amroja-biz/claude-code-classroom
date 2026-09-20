@@ -397,7 +397,10 @@ up)
     if [ -n "$INSTANCE_TYPE" ]; then
         note "instance type overridden: $INSTANCE_TYPE"
     else
-        read -r INSTANCE_TYPE _ _ _ <<<"$(lab_pick_instance "$STUDENTS" "$MEM_PER")"
+        # Size from effective peak, not from the cap. lab_effective_peak_mib
+        # decides which applies; `size` must agree with `up` or the box the
+        # operator was quoted is not the box they get.
+        read -r INSTANCE_TYPE _ _ _ <<<"$(lab_pick_instance "$STUDENTS" "$(lab_effective_peak_mib "$MEM_PER")")"
         # Show the reasoning, not just the answer: the operator is about to be
         # billed for this choice and should be able to disagree with it.
         echo
