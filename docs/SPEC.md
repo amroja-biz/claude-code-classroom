@@ -77,7 +77,7 @@ persistent user homes. Everything here is ephemeral by design.
 |---|---|
 | One EC2, many containers | Within the r7i family the cost per GiB-hour is the same at every size, so splitting across instances saves nothing on compute and multiplies fixed overhead and ops. |
 | `r7i` not `t3` | Burstable credits deplete when a whole cohort runs an exercise simultaneously. r7i is also cheaper per GiB than t3. |
-| Containers, not Unix accounts | `mem_limit` caps each student via cgroups. The reference repo needs an 8 GB swapfile because one runaway agent can livelock a shared box. |
+| Containers, not Unix accounts | `mem_limit` caps each student via cgroups, and `memswap_limit` denies them swap. The reference repo needs an 8 GB swapfile because one runaway agent can livelock a shared box; here swap is a 4 GiB net for the *host's* processes only. |
 | Keep JupyterHub | DockerSpawner + a custom Authenticator is ~30 lines of config. Replacing it means writing ~300 lines of session, lifecycle and proxy code you then own. |
 | First-party Claude API, not Bedrock | Bedrock disables the WebSearch tool and adds inference-profile and model-pinning complexity for no benefit at this scale. |
 | Own Route53 zone, not sslip.io | Verified 2026-09-18: sslip.io and nip.io resolve DNS correctly but both serve **expired TLS certificates** on their own sites. A free service that cannot keep its own cert valid does not belong on the critical path of a workshop. $0.50/mo removes the dependency. |
@@ -412,7 +412,10 @@ destroyed, which is the primary control.
 | Failure | Impact | Mitigation |
 |---|---|---|
 | Instance dies mid-workshop | Whole class down | Rebuild from AMI, ~3 min. Accepted risk. |
-| A student exhausts memory | That container OOM-killed only | `mem_limit = 2G` |
+| A student exhausts memory | That container OOM-killed only | `mem_limit = 2G`, and `memswap_limit = mem_limit` so it cannot swap its way into thrashing the box |
+| The host itself runs short | Class stops | 4 GiB reserved in sizing, plus a 4 GiB host swapfile as a fallback; `workshop status` reports live headroom |
+| More students spawn than the box was sized for | Class stops | `active_server_limit = --students`; the extra login is refused, the running cohort is unaffected |
+| Instance type does not match the AMI's architecture | `run-instances` fails with an unrelated-looking error | `up` compares both and refuses before any DNS or billing |
 | Let's Encrypt rate limit | No valid cert | Staging endpoint during development |
 | AMI is stale | Old Claude Code | `build` the day before each workshop |
 | Route53 record not updated | URL points at a dead IP | `up` verifies HTTPS answers before printing the URL |

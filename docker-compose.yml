@@ -22,6 +22,7 @@ services:
       LAB_STUDENT_IMAGE: lab-student:latest
       HUB_CONNECT_IP: lab-hub
       LAB_MEM_LIMIT: "2G"
+      LAB_MAX_SERVERS: "${LAB_MAX_SERVERS:-}"
       LAB_CURRICULUM: "${LAB_CURRICULUM:-intro-agents}"
       # Host path, not a path inside this container: the hub asks the host's
       # Docker daemon to bind-mount it into each student container. On the box

@@ -107,6 +107,28 @@ require_students() {
     [[ "$STUDENTS" =~ ^[0-9]+$ ]] && [ "$STUDENTS" -gt 0 ] || die "--students must be a positive integer"
 }
 
+# The architecture an instance type runs. Graviton (r7g, m7g, c7g...) is arm64;
+# everything else here is x86_64. Asking EC2 beats maintaining a family list.
+#
+# Dies rather than returning empty: an expired SSO token produces exactly the
+# same empty output as a nonexistent instance type, and reporting "unknown
+# instance type r7i.xlarge" at someone whose token just lapsed sends them
+# debugging the wrong thing entirely.
+instance_arch() {
+    local out
+    if ! out="$(aws ec2 describe-instance-types --instance-types "$1" \
+        --query 'InstanceTypes[0].ProcessorInfo.SupportedArchitectures[0]' \
+        --output text 2>&1)"; then
+        case "$out" in
+            *Token*|*expired*|*credential*|*SSO*)
+                die "AWS credentials are not valid: $out" ;;
+            *) die "could not look up instance type '$1': $out" ;;
+        esac
+    fi
+    [ -n "$out" ] && [ "$out" != "None" ] || die "unknown instance type '$1'"
+    echo "$out"
+}
+
 case "$SUB" in
 
 discover)
@@ -209,16 +231,28 @@ build)
     KEY="$(stack_output KeyPairName)"
     [ -n "$DOMAIN" ] || die "durable stack '$STACK' not found; deploy infra/durable.yaml first"
 
+    # The AMI's architecture is whatever the build instance is, because
+    # provision.sh builds the images natively on that box. Resolve the matching
+    # Ubuntu rather than hardcoding amd64, so --instance-type r7g works instead
+    # of failing inside run-instances with an opaque error.
+    BUILD_TYPE="${INSTANCE_TYPE:-r7i.xlarge}"
+    BUILD_ARCH="$(instance_arch "$BUILD_TYPE")"
+    case "$BUILD_ARCH" in
+        x86_64)  UBUNTU_ARCH=amd64 ;;
+        arm64)   UBUNTU_ARCH=arm64 ;;
+        *)       die "unsupported architecture '$BUILD_ARCH' for '$BUILD_TYPE'" ;;
+    esac
     UBUNTU="$(aws ec2 describe-images --owners 099720109477 \
-        --filters 'Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*' \
+        --filters "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-${UBUNTU_ARCH}-server-*" \
                   'Name=state,Values=available' \
         --query 'reverse(sort_by(Images,&CreationDate))[0].ImageId' --output text)"
-    note "base image: $UBUNTU"
+    [ -n "$UBUNTU" ] && [ "$UBUNTU" != "None" ] \
+        || die "no Ubuntu 24.04 $UBUNTU_ARCH image found"
+    note "base image: $UBUNTU ($BUILD_ARCH)"
 
     # Build on a bigger box than the workshop needs: this is CPU/network bound
     # and only runs for a few minutes, so paying for speed here is free in
     # practice.
-    BUILD_TYPE="${INSTANCE_TYPE:-r7i.xlarge}"
     note "launching build instance ($BUILD_TYPE)"
     BID="$(aws ec2 run-instances \
         --image-id "$UBUNTU" --instance-type "$BUILD_TYPE" \
@@ -344,6 +378,17 @@ up)
     [ -n "$AMI" ] && [ "$AMI" != "None" ] \
         || die "no workshop AMI found. Run 'workshop build' first (not yet implemented)."
 
+    # Launching an AMI on an instance of the wrong architecture fails inside
+    # run-instances with a message that does not mention architecture. Catch it
+    # here, before any DNS or billing has happened, and say what to do.
+    AMI_ARCH="$(aws ec2 describe-images --image-ids "$AMI" \
+        --query 'Images[0].Architecture' --output text 2>/dev/null)"
+    WANT_ARCH="$(instance_arch "$INSTANCE_TYPE")"
+    [ "$AMI_ARCH" = "$WANT_ARCH" ] || die \
+"instance type '$INSTANCE_TYPE' is $WANT_ARCH but AMI $AMI is $AMI_ARCH.
+  Rebuild for this architecture:  workshop build --instance-type $INSTANCE_TYPE
+  or choose a $AMI_ARCH instance type."
+
     DOMAIN="$(stack_output DomainName)"
     ZONE="$(stack_output HostedZoneId)"
     SG="$(stack_output SecurityGroupId)"
@@ -465,6 +510,7 @@ CF"
         ssh $SSH_OPTS "ubuntu@$IP" \
             "sudo install -m 0644 /tmp/codes.json /opt/lab/hub/codes.json && \
              cd /opt/lab && sudo LAB_CURRICULUM='$CURRICULUM' LAB_MEM_LIMIT='${MEM_PER}G' \
+             LAB_MAX_SERVERS='$STUDENTS' \
              LAB_CURRICULA_HOST_DIR=/opt/lab/curricula \
              ANTHROPIC_API_KEY=\$(aws ssm get-parameter --name '$LAB_SSM_PARAM' \
                 --with-decryption --query Parameter.Value --output text) \
@@ -473,6 +519,7 @@ CF"
         ssh $SSH_OPTS "ubuntu@$IP" \
             "sudo install -m 0644 /tmp/codes.json /opt/lab/hub/codes.json && \
              cd /opt/lab && sudo LAB_CURRICULUM='$CURRICULUM' LAB_MEM_LIMIT='${MEM_PER}G' \
+             LAB_MAX_SERVERS='$STUDENTS' \
              LAB_CURRICULA_HOST_DIR=/opt/lab/curricula \
              ANTHROPIC_API_KEY='$LAB_API_KEY' docker compose up -d"
     fi
@@ -546,6 +593,19 @@ status)
     AMIS="$(aws ec2 describe-images --owners self --filters "Name=tag:Name,Values=$TAG_NAME" \
             --query 'length(Images)' --output text 2>/dev/null || echo 0)"
     echo "  workshop AMIs   $AMIS"
+
+    # Memory headroom, when there is a box to ask. The sizing model reserves a
+    # fixed 4 GiB for the host; this is how you find out during a workshop
+    # whether that estimate is holding, rather than after it has not.
+    # Best-effort: never let a status check fail because ssh did not answer.
+    if [ -n "$IID" ] && [ -n "${LAB_SSH_PUBLIC_KEY:-}" ]; then
+        SIP="$(aws ec2 describe-instances --instance-ids "$IID" \
+               --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null)"
+        HEALTH="$(ssh $SSH_OPTS -o ConnectTimeout=5 "ubuntu@$SIP" \
+            "free -g | awk '/^Mem:/{printf \"%s GiB used of %s\", \$3, \$2} /^Swap:/{printf \"  swap %s of %s\", \$3, \$2}'; \
+             echo -n '  students '; docker ps -q --filter name=jupyter- | wc -l | tr -d ' '" 2>/dev/null)"
+        [ -n "$HEALTH" ] && echo "  memory        $HEALTH"
+    fi
     echo
     ;;
 

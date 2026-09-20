@@ -89,7 +89,17 @@ else:
 
 # The cap that makes a shared box safe: one runaway agent gets OOM-killed in its
 # own cgroup instead of driving the host into memory-reclaim livelock.
-c.DockerSpawner.mem_limit = os.environ.get("LAB_MEM_LIMIT", "2G")
+_mem_limit = os.environ.get("LAB_MEM_LIMIT", "2G")
+c.DockerSpawner.mem_limit = _mem_limit
+
+# A hard limit on how many students can be running at once, so the box cannot be
+# oversubscribed past what `workshop up --students N` sized it for. Normally
+# codes == seats == this number, but a hand-edited or reused codes.json would
+# otherwise let more containers start than there is memory for -- and the
+# failure would land mid-class.
+_max_servers = os.environ.get("LAB_MAX_SERVERS", "").strip()
+if _max_servers.isdigit() and int(_max_servers) > 0:
+    c.JupyterHub.active_server_limit = int(_max_servers)
 
 c.DockerSpawner.notebook_dir = "/home/jovyan"
 c.DockerSpawner.debug = True
@@ -100,6 +110,16 @@ c.DockerSpawner.debug = True
 # "unhealthy" in `docker ps` — alarming and wrong. The hub does its own liveness
 # checking, so turn the container-level one off.
 c.DockerSpawner.extra_create_kwargs = {"healthcheck": {"Test": ["NONE"]}}
+
+# memswap_limit == mem_limit means "no swap for this container".
+#
+# The box has a small swapfile so the host's own processes -- dockerd, this hub,
+# Caddy -- have somewhere to go under pressure instead of meeting the OOM
+# killer. Student containers must not be able to reach it: swap is what turns a
+# runaway agent into a box-wide thrash, which is exactly the failure the mem_limit
+# exists to prevent. Without this, Docker lets a container use up to 2x its
+# memory limit in swap.
+c.DockerSpawner.extra_host_config = {"memswap_limit": _mem_limit}
 
 # The shared workshop key, passed through to every student container.
 _api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()

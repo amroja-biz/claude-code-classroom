@@ -15,6 +15,29 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y ca-certificates curl gnupg debian-keyring debian-archive-keyring apt-transport-https
 
+# --- Host swap ---------------------------------------------------------------
+# A safety net for the HOST's processes only -- dockerd, the hub, Caddy. Student
+# containers are launched with memswap_limit == mem_limit, so they cannot touch
+# this; see hub/jupyterhub_config.py.
+#
+# This is NOT the reference project's 8 GiB swapfile. That one was load-bearing,
+# because a shared box with no per-user caps could be livelocked by one runaway
+# agent. Per-container cgroup limits make that structurally impossible here, so
+# swap goes back to being what it should be: headroom for the host if the 4 GiB
+# overhead budget in lib-size.sh turns out to be short on some cohort. A class
+# should degrade, not stop.
+#
+# swappiness 10: use it under real pressure, not as a routine tier.
+if ! swapon --show | grep -q .; then
+    fallocate -l 4G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+sysctl -w vm.swappiness=10
+echo 'vm.swappiness=10' > /etc/sysctl.d/99-lab-swappiness.conf
+
 # --- Docker (official repo; Ubuntu's docker.io lags) -------------------------
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
