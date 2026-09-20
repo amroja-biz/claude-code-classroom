@@ -5,6 +5,9 @@
 # `./scripts/workshop discover` prints what your AWS account offers -- VPCs,
 # public subnets, Route53 zones, configured profiles -- which is what you need
 # to fill this in.
+#
+# Nothing here is live. The file is read when you run a command, so an edit
+# affects the NEXT command and never a workshop already running.
 
 # =============================================================================
 # REQUIRED -- `workshop init` refuses to run without these four.
@@ -71,15 +74,20 @@ LAB_TAG=claude-classroom
 LAB_CURRICULA_DIR=./curricula
 
 # =============================================================================
-# SIZING -- rarely changed. `workshop size --students N` shows their effect.
+# SIZING -- you should not need to touch any of these.
+#
+# `workshop size --students N` explains every number here and shows the instance
+# they produce. They are inputs to choosing that instance, which happens once at
+# `up`, so they cannot be used to rescue a class in progress -- that would mean
+# `down` and `up` again, destroying student work. What protects a running class
+# is already on the box: every container capped and unable to swap, a hard limit
+# on concurrent students, and a 4 GiB host swapfile.
+#
+# If `workshop status` showed the host running tight, tune these for the NEXT
+# workshop.
 # =============================================================================
 
-# `workshop size --students N` explains every number below and shows which
-# instance they produce. You should not need to touch any of them.
-
-# RAM held back for the host itself (Docker, the hub, Caddy). The instance also
-# carries a 4 GiB swapfile as a fallback. If `workshop status` shows the host
-# running tight during a real class, raise this rather than adding swap.
+# RAM held back for the host itself (Docker, the hub, Caddy).
 #LAB_HOST_OVERHEAD_GIB=4
 
 # What fraction of each student's cap to provision for. A cap is a ceiling, not
