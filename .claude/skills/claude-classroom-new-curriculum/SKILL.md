@@ -200,9 +200,10 @@ name, deliberately, so a collision is silent.
   directory of that name puts course material where students save their files.
 - **`.claude`** — holds the seeded Claude Code state. Use `skills/` instead;
   that is what it is for.
-- **`.bashrc`, `.lab-bashrc`, `.lab-welcome`, `.lab-seeded`** — platform files.
-  Overwriting any of them breaks the banner, the shell setup, or the
-  seed-once guard.
+- **`.profile`, `.bashrc`, `.lab-bashrc`, `.lab-welcome`, `.lab-seeded`** —
+  platform files. `.profile` is what a login shell reads, and the chain
+  `.profile` → `.bashrc` → `.lab-bashrc` is what starts Claude Code. Overwrite
+  any link in it and students land on a bare prompt.
 - **`lessons`** — not reserved, but by convention it is the read-only material
   and `CLAUDE.md` tells the agent so. If they name it something else, change
   `CLAUDE.md` and `welcome.txt` to match, or the agent will protect a directory
