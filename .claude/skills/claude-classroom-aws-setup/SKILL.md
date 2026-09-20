@@ -110,9 +110,29 @@ Ask about (batch these into one question):
 - **Expected cohort size.** Not stored in config — `--students` is passed per
   workshop — but use it to show them what `./scripts/workshop size --students N`
   reports, so the cost is concrete before they commit.
-- **Curriculum.** The repo ships `intro-agents` and `mcp-servers` as examples.
-  Ask whether they will write their own; if so, mention `LAB_CURRICULA_DIR` can
-  point outside the repo to keep course content private.
+- **Curriculum.** Ask **which one**, not whether. A class runs exactly one
+  curriculum: `--curriculum` selects a single directory and its contents are
+  what every student gets. "The examples" is not a possible answer, so do not
+  offer it as one — a user who picks it will reasonably expect the material
+  from both and receive one.
+
+  List what is actually there, with what each contains, and say plainly that
+  both are thin placeholders rather than courses:
+
+  ```bash
+  for c in "$LAB_CURRICULA_DIR"/*/; do
+      echo "=== $(basename "$c")"; find "$c" -type f | sed "s|$c||"
+  done
+  ```
+
+  Their answer is the value you pass to `--curriculum` in step 7. Carry it
+  forward; do not substitute a different one because it is first alphabetically.
+
+  If they say they will write their own, point them at the
+  `claude-classroom-new-curriculum` skill and mention that `LAB_CURRICULA_DIR`
+  can point outside the repo to keep course content private. Switching between
+  curricula later is a `down` and an `up` with a different `--curriculum`, not a
+  rebuild.
 
 ## Step 3 — Write the config
 
@@ -194,13 +214,22 @@ the user's machine, and Docker is not required locally.
 the infrastructure exists. Only this proves a student can get a container — and
 nothing between `build` and a real login exercises a spawn.
 
+Use **the curriculum they chose in step 2**, not a hardcoded one. Rehearsing
+with different material than the class will teach proves the wrong thing, and
+the student will notice the difference before you do.
+
 ```bash
-./scripts/workshop up --students 2 --curriculum intro-agents
+./scripts/workshop up --students 2 --curriculum <their choice from step 2>
 ```
 
 Then have the user open the URL, enter the first code from the table, and
-confirm two things: JupyterLab loads, and `claude` starts in its terminal. Tell
-them what they should see before they look, so a broken lab is obvious.
+confirm three things: JupyterLab loads, the welcome banner names **their**
+curriculum, and `claude` starts on its own without them typing it. Tell them
+what they should see before they look, so a broken lab is obvious.
+
+A bare shell prompt with no banner is a failure, not a cosmetic one — it means
+the login-shell chain that launches the agent is broken, and a student would sit
+in front of a terminal with nothing telling them what to do.
 
 When it works:
 
