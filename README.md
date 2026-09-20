@@ -28,11 +28,9 @@ However, Claude costs could be in the hundreds of dollars. A comparable publishe
 ## Setup
 
 Open this repo in Claude Code (or any coding agent that reads
-`.claude/skills/`) and run:
+`.claude/skills/`) and ask it:
 
-```
-/claude-classroom-aws-setup
-```
+> Use the `claude-classroom-aws-setup` skill in this repo to configure a class
 
 It inspects your AWS account, offers choices instead of asking for resource IDs,
 asks only what it cannot infer, writes the config, deploys the stack, walks you

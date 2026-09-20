@@ -1,14 +1,11 @@
 # Principles
 
+Audience: **curious users**, for what this platform is for and why it behaves
+the way it does; and **platform developers and contributors**, for the
+constraints every change is checked against.
+
 What this platform is for, stated plainly enough that a decision can be checked
 against it.
-
-This file exists because it was missing. `scripts/lib-size.sh` was written to
-pick the cheapest instance a cohort fits into — its own comment said "the only
-thing that matters is picking the smallest box the cohort fits in" — and nothing
-anywhere said that a class staying up outranks saving six dollars. The code
-optimized the variable that had been written down. So the rest of it gets
-written down here.
 
 **This file outranks `docs/SPEC.md` and every code comment.** SPEC §2 holds
 design rules — how we build. These are goals — what we are building for. When a
@@ -158,14 +155,6 @@ against the box; sizing does not assume everyone pegs every ceiling at once.
 
 Recorded rather than quietly carried. These are open, not accepted.
 
-- ~~`lib-size.sh` states the wrong goal and sizes from the cap.~~ **Closed.**
-  The file now says why erring large is correct, sizes from `LAB_PEAK_MIB`
-  (measured), keeps the cap as a separate protective ceiling, falls back to
-  planning at the cap when the operator raises it without a measurement, and
-  prints the oversubscription factor instead of leaving it silent.
-  `scripts/test-size.sh` asserts the case that used to fail: 30 seats at
-  `--mem 5` now get 256 GiB, clearing the 124 GiB honest worst case that the
-  old formula's 121 GiB could not.
 - **Containment is proven locally, never yet on a real instance.** All four
   ceilings pass on Docker Desktop; the `workshop up` path that creates seat
   storage on EC2 has not been executed once. Closing this is part of the
