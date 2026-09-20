@@ -27,9 +27,10 @@ step before moving on.
 
 ## Step 1 — Prerequisites
 
-Alert the user that they must have an AWS account with appropriate permissions, an 
-Anthropic API key, and an ssh key. Docker is required for local testing but can be bypassed if 
-the user wants to deploy directly to AWS.
+Alert the user that they must have an AWS account with appropriate permissions,
+an Anthropic API key, an ssh key, and a domain they can point at this — either a
+Route53 zone in this account, or one they can add an NS record to elsewhere.
+Docker is not needed: every image is built on the EC2 instance.
 
 ```bash
 ./scripts/workshop discover
@@ -74,8 +75,9 @@ and a manual delegation in step 4. That is expected, not a failure.
 From the JSON, confirm:
 
 - `identity` is non-null — they have working credentials
-- `tools.docker` is true — needed only for local testing, so warn but continue
-  if false
+- `tools.docker` — **ignore it.** Docker is not needed to install or run a
+  workshop; the images are built on the EC2 instance. Do not mention it, and do
+  not warn if it is false.
 - `vpcs` is non-empty and `public_subnets` is non-empty — **hard requirement**.
   If there is no public subnet, stop: the workshop instance must be reachable.
 
@@ -162,34 +164,49 @@ A plausible length confirms it. Also remind them, once and plainly, to set a
 **spend limit on that key in the Anthropic Console** — it is shared by the whole
 cohort with no cap, and model spend dwarfs infrastructure cost.
 
-## Step 6 — Verify locally before spending on AWS
-
-```bash
-make dev-build
-make dev-up CURRICULUM=intro-agents
-```
-
-Open `http://localhost:8000` and log in with a code from `hub/codes.json`. This
-proves the images and hub work before any EC2 cost. Then `make dev-down`.
-
-`make dev-build` builds for the host architecture. Nothing here cross-builds:
-the AMI's images are built on the EC2 instance by `workshop build`, so they are
-always native to the box.
-
-On Apple Silicon this means local testing exercises an arm64 image while the AMI
-is amd64. Claude Code is a Bun binary that crashes under QEMU, so an emulated
-amd64 image serves JupyterLab but cannot start Claude Code. Do not try to work
-around this by cross-building — accept that this step verifies the hub, the
-spawner and the curriculum wiring, and that Claude Code itself is proven on AWS.
-
-## Step 7 — Bake the AMI
+## Step 6 — Bake the AMI
 
 ```bash
 ./scripts/workshop build
 ```
 
-Takes about 20 minutes. Tell the user it is long-running before you start it,
-and that it should be run the day before a workshop rather than the morning of.
+Takes about 20 minutes. Say so before you start it, and say why the timing
+matters: it should be run the day before a workshop, not the morning of. Claude
+Code ships often and this step pulls from several upstreams, so a failure wants
+a day of slack rather than thirty minutes.
+
+This builds the images on an EC2 instance and snapshots it. Nothing is built on
+the user's machine, and Docker is not required locally.
+
+## Step 7 — Rehearse, as a student
+
+**Do not skip this, and do not offer to skip it.** Everything up to here proves
+the infrastructure exists. Only this proves a student can get a container — and
+nothing between `build` and a real login exercises a spawn.
+
+```bash
+./scripts/workshop up --students 2 --curriculum intro-agents
+```
+
+Then have the user open the URL, enter the first code from the table, and
+confirm two things: JupyterLab loads, and `claude` starts in its terminal. Tell
+them what they should see before they look, so a broken lab is obvious.
+
+When it works:
+
+```bash
+./scripts/workshop down
+```
+
+Say plainly that billing runs until they do. Then tell them the rehearsal is
+repeatable and is the recommended habit the night before a class, with the real
+`--students N` so the instance they test is the instance they teach on. A fresh
+`up` the next morning is a carbon copy: same AMI, same images, same curricula,
+and nothing is fetched from the internet at `up` time.
+
+If the spawn fails, stop and report it rather than continuing to step 8. Check
+`docker logs` on the box — `remove = True` deletes a failed container quickly, so
+look promptly.
 
 ## Step 8 — Hand over
 
@@ -202,8 +219,12 @@ Summarize:
 - Their idle cost now (~$1/month) and per-workshop cost from
   `./scripts/workshop size`
 
-Offer to run a real `up` with 2 students so they can click through it, and make
-clear it starts billing until they run `down`.
+- That the rehearsal in step 7 is the habit to keep: `up` with the real cohort
+  size the night before, log in as a student, then `down`
+
+Point them at the README for running workshops. Point them at
+`docs/DEVELOPMENT.md` only if they say they want to change the platform itself —
+it is for contributors, and nothing in it is needed to teach a class.
 
 ## If something fails
 

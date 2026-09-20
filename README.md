@@ -46,8 +46,9 @@ so that it never passes through the agent.
 <details>
 <summary><b>Manual setup, if you would rather not</b></summary>
 
-Needs an AWS account with a VPC and public subnet, a Route53 domain, `aws` CLI
-v2, Docker, and an Anthropic API key.
+Needs an AWS account with a VPC and public subnet, a domain you can point at it,
+`aws` CLI v2, and an Anthropic API key. Docker is not required — the images are
+built on the EC2 instance, not on your machine.
 
 ```bash
 cp workshop.conf.example workshop.conf && $EDITOR workshop.conf
@@ -88,13 +89,32 @@ aws ssm put-parameter --name /claude-classroom/anthropic-api-key \
 time, so the last cohort's stop working. Instance type and disk are derived from
 `--students`; there is no default cohort size.
 
-Run `build` the day *before* — Claude Code ships often, and a broken upstream
-should surface with a day of slack. While iterating, add `--staging`: Let's
-Encrypt allows only 5 duplicate certificates per week per hostname, and a
-debugging loop will exhaust that.
-
 `down` terminates the instance and removes the A record. **Nothing is preserved**,
 including student work.
+
+## Rehearse the night before
+
+Run `build` the day *before* the class — Claude Code ships often, and a broken
+upstream should surface with a day of slack rather than thirty minutes before
+students arrive.
+
+Then do a full dress rehearsal, because it is the only thing that proves a
+student can actually get a container:
+
+```bash
+./scripts/workshop up --students 30 --curriculum intro-agents
+# open the URL, enter the first code, confirm you land in JupyterLab
+# and that `claude` starts in the terminal
+./scripts/workshop down
+```
+
+Use the real cohort size, so the instance you test is the instance you will
+teach on. In the morning, `up` again: same AMI, same images, same curricula, and
+nothing is fetched from the internet at `up` time — so it is a carbon copy of
+what you just verified.
+
+If you edit a curriculum after the rehearsal, you have changed the thing you
+tested. Re-run `up` and check it; that costs about three minutes.
 
 ## Curricula
 
@@ -115,24 +135,12 @@ workshop is fixable. Students get `~/lessons` (read-only material) and `~/work`
 `LAB_CURRICULA_DIR` outside this repo to keep your content private; the two here
 are examples.
 
-## Local development
+## Changing this repo
 
-Runs entirely on Docker, no AWS spend.
-
-```bash
-make dev-build && make dev-up CURRICULUM=intro-agents   # http://localhost:8000
-make dev-reset                                          # wipe and start over
-./scripts/test-size.sh && ./scripts/test-curriculum.sh && ./scripts/test-e2e.sh
-```
-
-Log in with a code from `hub/codes.json`.
-
-**Local images are native; the AMI is built on the box.** `workshop build` builds
-the images on the EC2 instance, so the shipped image is always amd64 without
-cross-building. On Apple Silicon your local image is therefore arm64. Don't try
-to close the gap by building amd64 locally: Claude Code is a Bun binary whose JS
-engine crashes under QEMU, so such an image serves JupyterLab but won't start
-Claude Code. Other traps of this kind are in [`docs/SPEC.md`](docs/SPEC.md).
+Running a workshop needs nothing on your machine but the AWS CLI. If you want to
+modify the platform itself — the images, the hub, the lifecycle scripts — there
+is a local Docker loop and a test suite:
+**[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)**.
 
 ## Acknowledgements
 
