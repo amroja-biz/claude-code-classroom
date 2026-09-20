@@ -1,7 +1,7 @@
 # Claude Code Classroom — Specification
 
-Status: **platform verified locally; AWS lifecycle implemented, under test on real AWS**
-Date: 2026-09-18
+Status: **verified locally, including containment; never yet executed end to end on real AWS**
+Date: 2026-09-20
 Target AWS account: set in `workshop.conf` (see `workshop.conf.example`)
 
 ---
@@ -20,6 +20,14 @@ persistent user homes. Everything here is ephemeral by design.
 ---
 
 ## 2. Design principles
+
+> These are build rules — *how* this is put together. What the platform is
+> **for**, and which goal wins when two conflict, is in
+> [`PRINCIPLES.md`](../PRINCIPLES.md), which **outranks this document**. When a
+> rule below produces an outcome that violates a principle there, the rule is
+> wrong. That is not hypothetical: "pick the smallest box the cohort fits in"
+> was a rule here, and it was optimizing the wrong variable.
+
 
 1. **Nothing persists between cohorts.** Student work is disposable. There is no
    backup, no migration path, and no recovery story — because there is nothing
@@ -62,9 +70,12 @@ persistent user homes. Everything here is ephemeral by design.
  │   │ student01    │  │ student02    │  ...   │ studentNN    │                │
  │   │ JupyterLab   │  │              │        │              │                │
  │   │ Claude Code  │  │              │        │              │                │
- │   │ mem_limit 2g │  │              │        │              │                │
+ │   │ mem  2g      │  │              │        │              │                │
+ │   │ cpu  box/4   │  │              │        │              │                │
+ │   │ pids 512     │  │              │        │              │                │
+ │   │ disk own fs  │  │              │        │              │                │
  │   └──────────────┘  └──────────────┘        └──────────────┘                │
- │        all from one image; named volumes on local disk; removed on stop      │
+ │      all from one image; each home its own filesystem; removed on stop       │
  └──────────────────────────────────────────────────────────────────────────────┘
 
  Persistent between workshops:   1 AMI  +  1 Route53 hosted zone   ≈ $1.10/mo
@@ -190,20 +201,61 @@ class CodeAuthenticator(Authenticator):
 # Spawning
 c.JupyterHub.spawner_class = 'dockerspawner.DockerSpawner'
 c.DockerSpawner.image      = 'lab-student:latest'
-c.DockerSpawner.mem_limit  = '2G'
 c.DockerSpawner.remove     = True
-c.DockerSpawner.volumes    = {'student-{username}': '/home/jovyan'}
 c.JupyterHub.hub_ip        = '0.0.0.0'
 c.Spawner.default_url      = '/lab'
+
+# Containment — see §5.3.1. Every exhaustible resource has a ceiling.
+c.DockerSpawner.mem_limit  = '2G'                       # memory
+c.DockerSpawner.cpu_limit  = max(1.0, os.cpu_count()/4) # hard CFS quota
+c.DockerSpawner.extra_host_config = {
+    'memswap_limit': '2G',                              # no swap escape
+    'pids_limit': 512,                                  # no fork bomb
+}
+# Home is a per-seat filesystem, so disk is capped too.
+c.DockerSpawner.volumes    = {'/srv/lab/home/{username}': '/home/jovyan'}
 ```
 
 - `codes.json` is generated fresh by `./workshop up` and written to the instance.
   New cohort means new codes; previous codes stop working with no revocation step.
 - A custom login template renders a single "Enter your code" field instead of the
   stock username + password form.
-- Named volumes live on the instance's local disk. They survive a container
-  restart *within* a workshop — so an OOM-killed container does not cost a student
-  their morning — and die with the instance.
+- Student homes live on the instance's local disk and survive a container
+  restart *within* a workshop — so an OOM-killed container does not cost a
+  student their morning — and die with the instance.
+
+### 5.3.1 Containment
+
+Claude Code runs with `--dangerously-skip-permissions`. Nothing between a
+student's prompt and the host asks "are you sure", so these ceilings are the
+only thing that does. All four are asserted against the kernel's own numbers by
+`scripts/test-containment.sh`.
+
+| Axis | Ceiling | Why it is not optional |
+|---|---|---|
+| Memory | `mem_limit` 2 GiB, `memswap_limit` equal | Without the swap denial, Docker lets a container use 2x its limit in swap and thrash the box |
+| CPU | `cpu_limit`, default ¼ of the box | One agent told to "build it faster" takes every core; the room goes slow with nothing on screen saying why |
+| PIDs | `pids_limit` 512 (measured peak 78) | A fork bomb exhausts the host's shared process table in seconds, killing dockerd and the hub rather than the student |
+| Disk | per-seat loop-mounted ext4 image | Docker cannot cap a named volume — `--storage-opt` applies to the writable layer, not volumes |
+
+Each is a **ceiling, not a reservation**. Seats are deliberately oversubscribed
+against them; sizing does not assume every seat pegs every ceiling at once, and
+`workshop size` prints the oversubscription factor rather than leaving it
+unstated.
+
+**Why per-seat filesystems and not project quotas.** Quotas are thinner and more
+standard. They were rejected because they cannot be tested anywhere but a real
+instance: Docker Desktop's kernel is built without `CONFIG_QUOTA`/`CONFIG_QFMT_V2`,
+so `mount -o prjquota` fails outright. A loop-mounted filesystem needs no quota
+subsystem — its size *is* the limit, enforced by ordinary `ENOSPC` — and behaves
+identically on a laptop and on the box. The cost is that seat space is
+preallocated rather than shared; `lab_disk_gib` already budgets exactly that.
+
+The image must be created with `mkfs.ext4 -E nodiscard`. mke2fs discards by
+default, which on a file punches holes straight through the blocks `fallocate`
+reserved (measured: 268435456 bytes before, 339968 after). The image goes
+sparse, every seat overcommits the same free space, and the containment
+silently stops being real.
 
 > **Version risk — RESOLVED 2026-09-18.** JupyterHub 6.0.1 and DockerSpawner
 > 14.0.0 work together, and the `quay.io/jupyter/minimal-notebook` base image
@@ -266,8 +318,9 @@ warning. The fallback is deliberate: silently teaching the wrong material is
 worse than a loud degraded start, and an empty lab is worse than both.
 
 Covered by `scripts/test-curriculum.sh` (seeding, cross-contamination, fallback,
-marker) and `scripts/test-e2e.sh` (the full Makefile -> compose -> hub ->
-spawner -> seed path).
+marker), `scripts/test-e2e.sh` (the full Makefile -> compose -> hub ->
+spawner -> seed path), and `scripts/test-containment.sh` (§5.3.1 — every
+ceiling asserted against the kernel's own numbers, then attacked).
 
 ### 5.6 Secrets
 
@@ -375,14 +428,21 @@ r7i family the cost per GiB-hour is the same at every size, so there is no cost
 advantage to any size and the only question is what fits. Dollar figures below
 are indicative (us-east-1, 2026-09-18); consult AWS pricing for your region.
 
-| Instance | RAM | Max students @ 2 GiB | 6-hour cost |
+| Instance | RAM | Max students @ 1024 MiB measured peak | 6-hour cost |
 |---|---|---|---|
-| r7i.large | 16 GiB | 6 | under $1 |
-| r7i.xlarge | 32 GiB | 14 | ~$2 |
-| r7i.2xlarge | 64 GiB | 30 | ~$3 |
-| r7i.4xlarge | 128 GiB | 62 | ~$6 |
-| r7i.8xlarge | 256 GiB | 126 | ~$13 |
-| r7i.12xlarge | 384 GiB | 190 | ~$19 |
+| r7i.large | 16 GiB | 9 | under $1 |
+| r7i.xlarge | 32 GiB | 23 | ~$2 |
+| r7i.2xlarge | 64 GiB | 50 | ~$3 |
+| r7i.4xlarge | 128 GiB | 106 | ~$6 |
+| r7i.8xlarge | 256 GiB | 216 | ~$13 |
+| r7i.12xlarge | 384 GiB | 326 | ~$19 |
+
+Generated from `scripts/lib-size.sh`, not maintained by hand — the previous
+version of this table survived two formula changes while staying on the page.
+Columns are capacity at the **measured** per-seat peak, cleared with 10% slack
+against usable (not nominal) memory. Raising `--mem` without supplying your own
+`LAB_PEAK_MIB` measurement makes sizing fall back to planning at the cap, so
+these numbers shrink accordingly.
 
 Past 190 seats nothing fits and `workshop up` refuses rather than silently
 truncating: run multiple independent stacks and encode the box in the login code
@@ -413,7 +473,10 @@ destroyed, which is the primary control.
 |---|---|---|
 | Instance dies mid-workshop | Whole class down | Rebuild from AMI, ~3 min. Accepted risk. |
 | A student exhausts memory | That container OOM-killed only | `mem_limit = 2G`, and `memswap_limit = mem_limit` so it cannot swap its way into thrashing the box |
-| The host itself runs short | Class stops | Sizing provisions for 50% of the per-seat cap plus 4 GiB host, compares against usable rather than nominal memory, and requires 10% slack on top; a 4 GiB host swapfile backs it, and `workshop status` reports live headroom |
+| A student pegs every core | That container throttled only | `cpu_limit`, a hard CFS quota defaulting to a quarter of the box. Verified: held to 3.04 cores against a 3.00 ceiling while spinning on 12 |
+| A student fork-bombs | That container refused more processes | `pids_limit = 512` against a measured peak of 78. Verified: fork refused at 507 of 700, hub still serving logins |
+| A student fills the disk | That student's own seat fills | Per-seat loop-mounted filesystem. Verified: a seat filled to 100% cost the shared filesystem 0.0 GiB and another seat stayed writable |
+| The host itself runs short | Class stops | Sizing provisions for every seat at its **measured** peak simultaneously plus 4 GiB host, compares against usable rather than nominal memory, and requires 10% slack on top; a 4 GiB host swapfile backs it, and `workshop status` reports live headroom |
 | More students spawn than the box was sized for | Class stops | `active_server_limit = --students`; the extra login is refused, the running cohort is unaffected |
 | Instance type does not match the AMI's architecture | `run-instances` fails with an unrelated-looking error | `up` compares both and refuses before any DNS or billing |
 | Let's Encrypt rate limit | No valid cert | Staging endpoint during development |
@@ -501,11 +564,42 @@ probes the server at its own root, but under JupyterHub it is mounted at
 through the same loader and finds itself. The override is a trimmed copy of the
 version-matched stock template; re-check it when bumping the jupyterhub pin.
 
+**`mkfs.ext4` discards by default and makes a preallocated image sparse.** See
+§5.3.1. Measured 268435456 bytes of reserved blocks before `mkfs`, 339968
+after. Every seat then overcommits the same free space while every command
+still reports success.
+
+**On a developer laptop, dockerd lives in its own mount namespace.** A loop
+mount made in the VM's init namespace is invisible to the daemon, so the
+bind-mount silently resolves to the underlying directory instead: the student
+container comes up with the whole VM disk at `/home/jovyan` and no limit,
+reporting success throughout. Verified: PID 1 at `mnt:[4026531841]`, dockerd at
+`mnt:[4026532553]`. `scripts/dev-seats.sh` enters dockerd's namespace for this
+reason; on the box there is no such split and the shim is unnecessary.
+
+**`docker exec` cannot get a PID while the container's process table is full.**
+The containment test's fork probe left 506 processes sleeping, and the next
+test silently failed to start — reporting a pass, because "no CPU load" looked
+like "the ceiling held". Tests now wait for the table to drain, and every
+assertion carries a floor so a test that generates no load fails instead.
+
+**The pids controller lets migrated tasks charge past the limit.** `pids.peak`
+can legitimately sit slightly above `pids.max` (observed 517 against 512), so
+asserting `peak <= max` fails a cap that is working correctly. Assert that
+process creation was *refused* instead.
+
 ### Measured, not estimated
 
 - Spawn time, native arch, image already local: **~10 seconds** to JupyterLab
   serving (spec assumed 2-5s; still well inside acceptable).
 - `mem_limit` verified applied: 2147483648 bytes exactly.
+- Per-seat peak memory, whole container, cgroup v2 `memory.peak`: idle lab
+  **154 MiB**; Claude Code open and idle **301 MiB**; reasoning without
+  executing **482 MiB**; executing a toolchain install and build **1036 MiB**.
+  Anon (unreclaimable) stayed at 246 MiB throughout. Sampling at 2s intervals
+  missed the true peak by 22% (846 vs 1036) — read `memory.peak`, not `docker stats`.
+- Per-seat disk for one 292-package npm install and build: **252 MiB**.
+- Peak process count: **21** for that install, **78** with four parallel `tsc` runs.
 - Versions as built: Claude Code 2.1.276, JupyterHub 6.0.1 (hub and single-user),
   JupyterLab 4.6.3, notebook 7.6.2.
 
@@ -515,8 +609,16 @@ version-matched stock template; re-check it when bumping the jupyterhub pin.
 
 **Considered 2026-09-18, not adopted. Recorded with its trigger.**
 
+> **Updated 2026-09-20.** Student workspaces are now per-seat filesystem images
+> under `/srv/lab`, not named volumes under `/var/lib/docker/volumes` (§5.3.1),
+> so a split data volume would now target `/srv/lab` instead. That change does
+> not resolve this item: the images still sit on the root disk, so the AMI
+> floor problem and the cohort-size coupling below are both unchanged. If
+> anything the case is slightly stronger, since seat images are preallocated
+> and therefore occupy their full size from the moment `up` runs.
+
 Today the instance has one volume: OS, Docker images and student workspaces all
-on the root disk, sized `12 GiB + 1 GiB/student`.
+on the root disk, sized `15 GiB + 5 GiB/student`.
 
 The alternative is two: a small fixed root (~20 GiB, baked into the AMI, holding
 OS and images) plus a per-cohort data volume for class data and student

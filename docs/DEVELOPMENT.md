@@ -8,6 +8,11 @@ because the images are built on the EC2 instance rather than on your machine.
 Design rationale, sizing tables and the traps found while building this are in
 [`SPEC.md`](SPEC.md). Read it before inventing an explanation for odd behaviour.
 
+What the platform is *for* — and which goal wins when two of them conflict — is
+in [`PRINCIPLES.md`](../PRINCIPLES.md). It outranks both this file and SPEC:
+when a design rule here produces an outcome that violates a principle, the rule
+is wrong. Read it before changing sizing, defaults or containment.
+
 ## The local loop
 
 `docker-compose.yml` is the same file that runs on the instance: a hub container
@@ -17,12 +22,21 @@ seeding, Claude Code with the key injected — everything except EC2, TLS and DN
 
 ```bash
 make dev-build                            # build both images for this host
+make dev-seats                            # per-seat filesystems (disk limits)
 make dev-up CURRICULUM=intro-agents       # http://localhost:8000
 make dev-logs                             # follow the hub
 make dev-down                             # stop, remove student containers
-make dev-reset                            # also drop home volumes, forcing a re-seed
+make dev-reset                            # also drop student homes, forcing a re-seed
+make dev-seats-down                       # unmount and delete seat filesystems
 make curricula                            # list available curricula
 ```
+
+`make dev-seats` is not optional if you are touching containment. Student homes
+are per-seat loop-mounted filesystems, not named volumes, and without them
+`dev-up` warns and falls back to named volumes — which persist fine but have no
+disk limit at all. `make dev-reset` re-creates the seat filesystems, because
+dropping named volumes alone now leaves every home intact and `seed-home` skips
+re-seeding: a reset that resets nothing.
 
 Log in with a code from `hub/codes.json`, which is created from the example on
 first `dev-up` and is gitignored.
@@ -42,11 +56,28 @@ a respawn — `make dev-reset && make dev-up` — not a rebuild.
 ./scripts/test-size.sh         # sizing maths; fails if a default cohort size reappears
 ./scripts/test-curriculum.sh   # seeding, cross-contamination, fallback, marker
 ./scripts/test-e2e.sh          # Makefile -> compose -> hub -> spawner -> seed
+./scripts/test-containment.sh  # memory, CPU, PID and disk ceilings actually applied
 ```
 
 `test-e2e.sh` builds on `make dev-up`, so it needs Docker and a built image.
 `test-curriculum.sh` mounts `curricula/` the way the spawner does, and guards
 against curricula being baked back into the image.
+
+`test-containment.sh` is the one that matters most and the one most likely to
+rot. It asserts the *kernel's* numbers — `memory.max`, `cpu.max`, `pids.max`,
+the seat's own filesystem — not the config that set them, because a limit
+nobody tests is a limit that silently stops being applied. It then attacks each
+one: forks until refused, spins on every core, allocates past the cap, and
+fills a seat to 100%, checking after each that the hub is still serving.
+
+Two things it has already caught that review did not:
+
+- A CPU check that reported "ok" against 0.01 cores because the spinners never
+  started. Assertions now carry a floor: a test that generates no load fails
+  instead of passing.
+- Seat images that were silently sparse, because `mkfs.ext4` discards by
+  default and punched holes through what `fallocate` had reserved. Every seat
+  overcommitted the same free space and the containment was fake.
 
 ## Builds are always native
 
@@ -90,6 +121,8 @@ week.
 scripts/workshop        lifecycle CLI: discover, init, build, up, down, size, status
 scripts/provision.sh    runs on the build instance; installs Docker, Caddy, builds images
 scripts/lib-size.sh     instance type and disk derived from --students
+scripts/seat-storage.sh per-seat filesystems; runs on the box, and under dev-seats
+scripts/dev-seats.sh    local shim: runs the above in the Docker VM's namespace
 infra/durable.yaml      CloudFormation: hosted zone, SG, key pair, IAM role
 hub/                    JupyterHub image, config, code authenticator, login template
 student-image/          the student sandbox, and the home-seeding script

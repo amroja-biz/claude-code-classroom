@@ -95,6 +95,26 @@ time, so the last cohort's stop working. Instance type and disk are derived from
 `down` terminates the instance and removes the A record. **Nothing is preserved**,
 including student work.
 
+### One student cannot end the class
+
+Every seat runs with a ceiling on each resource it could otherwise exhaust for
+everyone else. You do not configure any of this; it is why `size` picks the box
+it picks.
+
+| If a student… | What happens |
+|---|---|
+| runs out of memory | only their container is killed, and it restarts with their work intact |
+| pegs every CPU | only their container is throttled; the room stays responsive |
+| fork-bombs the machine | their container is refused more processes; the hub keeps serving |
+| fills the disk | only their own seat fills; everyone else keeps working |
+
+`size` shows the reasoning behind the instance it chose, including what would
+happen if every seat used its full memory allowance at once.
+
+If your course material is heavier than the default assumption — large models,
+big datasets, long-running builds — raise the per-seat allowance with
+`--mem <GiB>` and `size` will pick a correspondingly larger box.
+
 ## Rehearse the night before
 
 Run `build` the day *before* the class — Claude Code ships often, and a broken
