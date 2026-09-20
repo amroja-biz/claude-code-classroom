@@ -45,6 +45,10 @@ LAB_SSM_PARAM=/claude-classroom/anthropic-api-key
 # AWS profile. Every AWS call this tool makes uses this one profile, so on a
 # machine with several, set it deliberately -- `default` is rarely the account
 # you mean. `discover` lists the profiles you have.
+#
+# These two win over AWS_PROFILE and AWS_REGION in your environment. An export
+# in a shell profile must not be able to redirect `init` or `down` at an account
+# you did not configure here; when the two disagree, the command says so.
 LAB_AWS_PROFILE=default
 LAB_AWS_REGION=us-east-1
 

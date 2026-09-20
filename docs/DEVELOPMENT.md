@@ -54,10 +54,15 @@ a respawn — `make dev-reset && make dev-up` — not a rebuild.
 
 ```bash
 ./scripts/test-size.sh         # sizing maths; fails if a default cohort size reappears
+./scripts/test-config.sh       # which AWS account a command resolves to, and says so
 ./scripts/test-curriculum.sh   # seeding, cross-contamination, fallback, marker
 ./scripts/test-e2e.sh          # Makefile -> compose -> hub -> spawner -> seed
 ./scripts/test-containment.sh  # memory, CPU, PID and disk ceilings actually applied
 ```
+
+`test-size.sh` and `test-config.sh` need neither Docker nor AWS — the first is
+arithmetic, the second stubs the `aws` binary on `PATH`. Run both before any
+change to `scripts/workshop`.
 
 `test-e2e.sh` builds on `make dev-up`, so it needs Docker and a built image.
 `test-curriculum.sh` mounts `curricula/` the way the spawner does, and guards

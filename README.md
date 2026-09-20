@@ -57,7 +57,10 @@ settings are required — `LAB_DOMAIN`, `LAB_VPC_ID`, `LAB_SSH_PUBLIC_KEY` and
 discover` prints what your account offers, which is what you need to fill it in.
 
 If you have more than one AWS profile, set `LAB_AWS_PROFILE`. Every AWS call
-uses that one profile, and `default` is rarely the account you mean.
+uses that one profile, and `default` is rarely the account you mean. It takes
+precedence over an `AWS_PROFILE` exported in your shell, so the account a
+command acts on is the one written in the config — every command that changes
+anything prints the profile and account id before it starts.
 
 `init` deploys the durable resources — security group, IAM role, key pair, DNS —
 about $0.50/month. Set `LAB_HOSTED_ZONE_ID` to a Route53 zone you already own in

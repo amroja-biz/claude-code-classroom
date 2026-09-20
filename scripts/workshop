@@ -38,9 +38,24 @@ fi
 STACK="${LAB_STACK:-claude-classroom-durable}"
 TAG_NAME="${LAB_TAG:-claude-classroom}"
 CURRICULA_DIR="${LAB_CURRICULA_DIR:-./curricula}"
-AWS_PROFILE="${AWS_PROFILE:-${LAB_AWS_PROFILE:-default}}"
+# workshop.conf wins over the ambient environment, not the other way round. An
+# exported AWS_PROFILE from a shell profile is common and invisible; if it could
+# override the config, every command -- including `down` -- would silently
+# target an account the operator never chose. The env var still applies when the
+# config is silent, which is what `discover` needs on a fresh clone.
+if [ -n "${LAB_AWS_PROFILE:-}" ] && [ -n "${AWS_PROFILE:-}" ] \
+   && [ "$LAB_AWS_PROFILE" != "$AWS_PROFILE" ]; then
+    echo "note: AWS_PROFILE=$AWS_PROFILE in the environment; using" \
+         "LAB_AWS_PROFILE=$LAB_AWS_PROFILE from $CONF." >&2
+fi
+if [ -n "${LAB_AWS_REGION:-}" ] && [ -n "${AWS_REGION:-}" ] \
+   && [ "$LAB_AWS_REGION" != "$AWS_REGION" ]; then
+    echo "note: AWS_REGION=$AWS_REGION in the environment; using" \
+         "LAB_AWS_REGION=$LAB_AWS_REGION from $CONF." >&2
+fi
+AWS_PROFILE="${LAB_AWS_PROFILE:-${AWS_PROFILE:-default}}"
 export AWS_PROFILE
-AWS_REGION="${AWS_REGION:-${LAB_AWS_REGION:-us-east-1}}"
+AWS_REGION="${LAB_AWS_REGION:-${AWS_REGION:-us-east-1}}"
 export AWS_REGION
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10"
@@ -128,6 +143,19 @@ instance_arch() {
     [ -n "$out" ] && [ "$out" != "None" ] || die "unknown instance type '$1'"
     echo "$out"
 }
+
+# Name the account before anything moves. A wrong target is otherwise invisible
+# until it fails -- or worse, until it succeeds somewhere unintended.
+show_target() {
+    local id
+    id="$(aws sts get-caller-identity --query Account --output text 2>&1)" \
+        || die "AWS credentials are not valid for profile '$AWS_PROFILE': $id"
+    note "profile $AWS_PROFILE -> account $id, region $AWS_REGION"
+}
+
+case "$SUB" in
+    init|build|up|down) show_target ;;
+esac
 
 case "$SUB" in
 
