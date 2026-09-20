@@ -27,6 +27,12 @@ make curricula                            # list available curricula
 Log in with a code from `hub/codes.json`, which is created from the example on
 first `dev-up` and is gitignored.
 
+`make dev-up` takes the API key from `$ANTHROPIC_API_KEY`, falling back to a
+macOS keychain entry of the same name. This is the one place that local path
+exists: on AWS the key must come from Parameter Store, because there the key
+would otherwise be read onto your machine and passed over ssh. Locally there is
+no instance and no ssh session, so there is nothing to leak.
+
 Curricula are mounted, not baked into the image, so editing a lesson needs only
 a respawn — `make dev-reset && make dev-up` — not a rebuild.
 

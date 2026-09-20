@@ -7,9 +7,6 @@ terminal with Claude Code already running. `down` destroys everything.
 One EC2 instance, Docker and Caddy — no ALB, NAT, ECS, EKS, EFS or Cognito.
 Idle cost between workshops is about $1/month.
 
-Design decisions, sizing tables and the traps found while building it:
-**[`docs/SPEC.md`](docs/SPEC.md)**.
-
 ---
 
 ## IMPORTANT
@@ -22,7 +19,7 @@ create a dedicated key in the Anthropic Console and set a spending cap for each 
 Students can read the key from their class environment.
 
 **Class cost expectations**
-The AWS infrastruture supporting each class has been tuned so as to incur minimal costs. 
+The AWS infrastructure supporting each class has been tuned so as to incur minimal costs. 
 However, Claude costs could be in the hundreds of dollars. A comparable published workshop 
 (~40 people, 4 hours) spent $8 on EC2 and $380 on model API calls.
 
@@ -54,9 +51,13 @@ cp workshop.conf.example workshop.conf && $EDITOR workshop.conf
 ./scripts/workshop init
 ```
 
-`workshop.conf` is gitignored and holds everything account-specific; each
-setting is commented in the example. `./scripts/workshop discover` prints what
-your account offers, which is useful when filling it in.
+`workshop.conf` is gitignored and holds everything account-specific. Four
+settings are required — `LAB_DOMAIN`, `LAB_VPC_ID`, `LAB_SSH_PUBLIC_KEY` and
+`LAB_SSM_PARAM` — and the rest have working defaults. `./scripts/workshop
+discover` prints what your account offers, which is what you need to fill it in.
+
+If you have more than one AWS profile, set `LAB_AWS_PROFILE`. Every AWS call
+uses that one profile, and `default` is rarely the account you mean.
 
 `init` deploys the durable resources — security group, IAM role, key pair, DNS —
 about $0.50/month. Set `LAB_HOSTED_ZONE_ID` to a Route53 zone you already own in
@@ -143,6 +144,9 @@ Running a workshop needs nothing on your machine but the AWS CLI. If you want to
 modify the platform itself — the images, the hub, the lifecycle scripts — there
 is a local Docker loop and a test suite:
 **[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)**.
+
+Design decisions, sizing tables and the traps found while building it are in
+**[`docs/SPEC.md`](docs/SPEC.md)**.
 
 ## Acknowledgements
 
