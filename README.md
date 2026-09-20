@@ -15,17 +15,16 @@ Design decisions, sizing tables and the traps found while building it:
 ## IMPORTANT
 
 **Claude Code runs with `--dangerously-skip-permissions`.** Students' agents
-execute without confirmation prompts. Fine for a time-boxed workshop on a
-disposable host with people you know; not for untrusted participants, anything
-long-lived, or a host with access to data you care about. The host existing for
-only a few hours is the primary control — it only works if you run `down`.
+execute without confirmation prompts. 
 
-**One API key is shared by the cohort, with no spend cap.** Use a **dedicated
-key with a spend limit set in the Anthropic Console**, not your main key.
-Students can read it from their own container; that is unavoidable. A comparable
-published workshop (~40 people, 4 hours) spent **$8 on EC2 and $380 on model API
-calls** — infrastructure cost is a rounding error, so set the limit before you
-hand out codes.
+**One Anthropic API key is shared by the class.** It is recommended that you 
+create a dedicated key in the Anthropic Console and set a spending cap for each class.
+Students can read the key from their class environment.
+
+**Class cost expectations**
+The AWS infrastruture supporting each class has been tuned so as to incur minimal costs. 
+However, Claude costs could be in the hundreds of dollars. A comparable published workshop 
+(~40 people, 4 hours) spent $8 on EC2 and $380 on model API calls.
 
 ---
 
