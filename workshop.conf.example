@@ -36,16 +36,15 @@ LAB_TAG=claude-classroom
 # keep course content out of this repository.
 LAB_CURRICULA_DIR=./curricula
 
-# Anthropic API key. Prefer a dedicated key with a spend limit -- see README.
+# REQUIRED. The SSM Parameter Store parameter holding the Anthropic API key.
+# The instance fetches it under its own IAM role, so the key never sits on this
+# machine and never crosses your ssh session. There is no other supported
+# source, and the stack grants the instance read access to exactly this name --
+# so set it before running 'workshop init'.
 #
-# Recommended: an SSM Parameter Store SecureString. The instance fetches it
-# under its own IAM role, so the key never sits on your machine.
 #   aws ssm put-parameter --name /claude-classroom/anthropic-api-key \
 #       --type SecureString --value 'sk-ant-...'
-LAB_SSM_PARAM=
-
-# Fallbacks, used only when LAB_SSM_PARAM is empty. LAB_API_KEY_CMD is a command
-# that PRINTS the key; the key itself never belongs in this file. With both
-# empty, $ANTHROPIC_API_KEY is read from the environment, then the macOS
-# keychain entry of the same name.
-LAB_API_KEY_CMD=
+#
+# Use a dedicated key with a spend limit set in the Anthropic Console, not your
+# main key -- see README.
+LAB_SSM_PARAM=/claude-classroom/anthropic-api-key

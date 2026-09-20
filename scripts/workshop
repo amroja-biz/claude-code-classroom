@@ -167,6 +167,14 @@ init)
     # and every account-specific value has exactly one home.
     [ -n "${LAB_DOMAIN:-}" ]  || die "LAB_DOMAIN is not set in $CONF"
     [ -n "${LAB_VPC_ID:-}" ]  || die "LAB_VPC_ID is not set in $CONF"
+    # The stack's SSM read policy is conditional on this name, so an empty value
+    # deploys a role that cannot fetch the key and fails at `up` instead.
+    [ -n "${LAB_SSM_PARAM:-}" ] || die \
+"LAB_SSM_PARAM is not set in $CONF. It names the SSM parameter holding the
+  Anthropic API key, and the instance role is granted read access to exactly
+  that name -- so it has to be decided before the stack is deployed.
+
+    LAB_SSM_PARAM=/claude-classroom/anthropic-api-key"
     KEYFILE="${LAB_SSH_PUBLIC_KEY:-}"
     [ -n "$KEYFILE" ] || die "LAB_SSH_PUBLIC_KEY is not set in $CONF"
     # Expand ~ even when the value was quoted in the config file.
@@ -202,15 +210,13 @@ init)
         echo "  Then confirm:  dig +short NS $LAB_DOMAIN"
     fi
 
-    if [ -n "${LAB_SSM_PARAM:-}" ]; then
-        if aws ssm get-parameter --name "$LAB_SSM_PARAM" >/dev/null 2>&1; then
-            note "API key parameter $LAB_SSM_PARAM exists"
-        else
-            echo
-            echo "  Now store the API key:"
-            echo "    aws ssm put-parameter --name '$LAB_SSM_PARAM' \\"
-            echo "        --type SecureString --value 'sk-ant-...'"
-        fi
+    if aws ssm get-parameter --name "$LAB_SSM_PARAM" >/dev/null 2>&1; then
+        note "API key parameter $LAB_SSM_PARAM exists"
+    else
+        echo
+        echo "  Now store the API key:"
+        echo "    aws ssm put-parameter --name '$LAB_SSM_PARAM' \\"
+        echo "        --type SecureString --value 'sk-ant-...'"
     fi
     note "init complete"
     ;;
@@ -363,6 +369,31 @@ up)
     require_students
     [ -n "$CURRICULUM" ] || die "--curriculum is required (see: make curricula)"
 
+    # Parameter Store is the only supported source, deliberately. The instance
+    # fetches the key under its own IAM role, so it never exists on this machine
+    # and never crosses the ssh session.
+    #
+    # There used to be three fallbacks -- a command, $ANTHROPIC_API_KEY, and the
+    # macOS keychain. Each read the key locally and then interpolated it into the
+    # remote command line, which is exactly what this path exists to avoid, and
+    # nothing told you that you had silently dropped into the weaker mode.
+    [ -n "${LAB_SSM_PARAM:-}" ] || die \
+"LAB_SSM_PARAM is not set in $CONF.
+
+  The Anthropic API key must live in SSM Parameter Store, so the instance can
+  fetch it under its own IAM role instead of it passing through this machine.
+
+    aws ssm put-parameter --name /claude-classroom/anthropic-api-key \\
+        --type SecureString --value 'sk-ant-...'
+
+  Then set in $CONF:  LAB_SSM_PARAM=/claude-classroom/anthropic-api-key
+  Re-run 'workshop init' afterwards so the instance role is granted read access."
+    aws ssm get-parameter --name "$LAB_SSM_PARAM" --with-decryption \
+        --query Parameter.Value --output text >/dev/null 2>&1 \
+        || die "cannot read $LAB_SSM_PARAM. Create it with:
+    aws ssm put-parameter --name '$LAB_SSM_PARAM' --type SecureString --value '<key>'"
+    note "API key: Parameter Store ($LAB_SSM_PARAM), fetched on the instance"
+
     if [ -n "$INSTANCE_TYPE" ]; then
         note "instance type overridden: $INSTANCE_TYPE"
     else
@@ -376,7 +407,7 @@ up)
             --filters "Name=tag:Name,Values=$TAG_NAME" "Name=state,Values=available" \
             --query 'reverse(sort_by(Images,&CreationDate))[0].ImageId' --output text 2>/dev/null)"
     [ -n "$AMI" ] && [ "$AMI" != "None" ] \
-        || die "no workshop AMI found. Run 'workshop build' first (not yet implemented)."
+        || die "no workshop AMI found. Run 'workshop build' first."
 
     # Launching an AMI on an instance of the wrong architecture fails inside
     # run-instances with a message that does not mention architecture. Catch it
@@ -396,26 +427,6 @@ up)
     KEY="$(stack_output KeyPairName)"
     [ -n "$DOMAIN" ] || die "durable stack '$STACK' not found; deploy infra/durable.yaml first"
 
-    # When LAB_SSM_PARAM is set the instance fetches the key itself under its
-    # IAM role, so it never exists on this machine and never crosses the ssh
-    # session. Otherwise fall back to resolving it locally.
-    if [ -n "${LAB_SSM_PARAM:-}" ]; then
-        LAB_API_KEY=""
-        aws ssm get-parameter --name "$LAB_SSM_PARAM" --with-decryption \
-            --query Parameter.Value --output text >/dev/null 2>&1 \
-            || die "cannot read $LAB_SSM_PARAM. Create it with:
-    aws ssm put-parameter --name '$LAB_SSM_PARAM' --type SecureString --value '<key>'"
-        note "API key: Parameter Store ($LAB_SSM_PARAM), fetched on the instance"
-    elif [ -n "${LAB_API_KEY_CMD:-}" ]; then
-        LAB_API_KEY="$(eval "$LAB_API_KEY_CMD" 2>/dev/null || true)"
-    else
-        LAB_API_KEY="${ANTHROPIC_API_KEY:-}"
-        if [ -z "$LAB_API_KEY" ] && [ "$(uname -s)" = "Darwin" ]; then
-            LAB_API_KEY="$(security find-generic-password -a "$USER" -s ANTHROPIC_API_KEY -w 2>/dev/null || true)"
-        fi
-    fi
-    [ -n "${LAB_SSM_PARAM:-}" ] || [ -n "$LAB_API_KEY" ] \
-        || die "no Anthropic API key. Set LAB_SSM_PARAM, ANTHROPIC_API_KEY, or LAB_API_KEY_CMD in $CONF"
 
     note "generating $STUDENTS codes"
     CODES_JSON="$(mktemp)"; TABLE="$(mktemp)"
@@ -504,25 +515,16 @@ CF"
 
     note "delivering codes and starting the hub"
     scp $SSH_OPTS -q "$CODES_JSON" "ubuntu@$IP:/tmp/codes.json"
-    if [ -n "${LAB_SSM_PARAM:-}" ]; then
-        # \$( ) is escaped deliberately: it evaluates on the instance, using the
-        # instance role, so the key never crosses this ssh session.
-        ssh $SSH_OPTS "ubuntu@$IP" \
-            "sudo install -m 0644 /tmp/codes.json /opt/lab/hub/codes.json && \
-             cd /opt/lab && sudo LAB_CURRICULUM='$CURRICULUM' LAB_MEM_LIMIT='${MEM_PER}G' \
-             LAB_MAX_SERVERS='$STUDENTS' \
-             LAB_CURRICULA_HOST_DIR=/opt/lab/curricula \
-             ANTHROPIC_API_KEY=\$(aws ssm get-parameter --name '$LAB_SSM_PARAM' \
-                --with-decryption --query Parameter.Value --output text) \
-             docker compose up -d"
-    else
-        ssh $SSH_OPTS "ubuntu@$IP" \
-            "sudo install -m 0644 /tmp/codes.json /opt/lab/hub/codes.json && \
-             cd /opt/lab && sudo LAB_CURRICULUM='$CURRICULUM' LAB_MEM_LIMIT='${MEM_PER}G' \
-             LAB_MAX_SERVERS='$STUDENTS' \
-             LAB_CURRICULA_HOST_DIR=/opt/lab/curricula \
-             ANTHROPIC_API_KEY='$LAB_API_KEY' docker compose up -d"
-    fi
+    # \$( ) is escaped deliberately: it evaluates on the instance, using the
+    # instance role, so the key never crosses this ssh session.
+    ssh $SSH_OPTS "ubuntu@$IP" \
+        "sudo install -m 0644 /tmp/codes.json /opt/lab/hub/codes.json && \
+         cd /opt/lab && sudo LAB_CURRICULUM='$CURRICULUM' LAB_MEM_LIMIT='${MEM_PER}G' \
+         LAB_MAX_SERVERS='$STUDENTS' \
+         LAB_CURRICULA_HOST_DIR=/opt/lab/curricula \
+         ANTHROPIC_API_KEY=\$(aws ssm get-parameter --name '$LAB_SSM_PARAM' \
+            --with-decryption --query Parameter.Value --output text) \
+         docker compose up -d"
 
     # Restart Caddy now that the A record points here, so it requests the
     # certificate immediately instead of waiting out its ACME backoff.

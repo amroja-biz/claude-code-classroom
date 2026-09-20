@@ -119,6 +119,12 @@ Ask about (batch these into one question):
 Copy `workshop.conf.example` to `workshop.conf` and set the values decided
 above. Keep the explanatory comments. `workshop.conf` is gitignored.
 
+`LAB_SSM_PARAM` is required and the example's default
+(`/claude-classroom/anthropic-api-key`) is fine unless they want another name.
+It has to be right *before* step 4, because the stack grants the instance role
+read access to exactly that parameter name. The key itself does not need to
+exist yet — that is step 5.
+
 Show the user the finished file before proceeding.
 
 ## Step 4 — Deploy the durable stack
@@ -144,11 +150,15 @@ without it, and Let's Encrypt will fail in a way that looks like a TLS bug.
 
 ## Step 5 — Store the API key
 
-The workshop needs an Anthropic API key. **Do not ask the user to paste it into
-the conversation, and never run a command containing it.**
+Parameter Store is the only supported source. The instance fetches the key under
+its own IAM role, so it never touches the operator's machine and never crosses an
+ssh session — there is no environment-variable or keychain path to fall back to.
+
+**Do not ask the user to paste the key into the conversation, and never run a
+command containing it.**
 
 Tell them to run it themselves, using the `!` prefix so it executes in their
-session and never passes through you:
+session and never passes through you — with the name they set as `LAB_SSM_PARAM`:
 
 ```
 ! aws ssm put-parameter --name /claude-classroom/anthropic-api-key --type SecureString --value 'sk-ant-...' --profile <their-profile>

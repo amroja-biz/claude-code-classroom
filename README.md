@@ -66,7 +66,10 @@ creates a zone for the subdomain instead, printing nameservers to delegate from
 the parent — the path to use when the parent domain lives in a different AWS
 account.
 
-Then store the API key where the instance fetches it under its own IAM role:
+`LAB_SSM_PARAM` must be set before `init`, because the stack grants the instance
+role read access to exactly that parameter name. The key itself can be stored
+afterwards, any time before your first `up` — the instance fetches it under its
+own IAM role, and there is no other supported source:
 
 ```bash
 aws ssm put-parameter --name /claude-classroom/anthropic-api-key \
