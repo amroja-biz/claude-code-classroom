@@ -517,6 +517,17 @@ CF"
          sudo tar xzf /tmp/curricula.tar.gz -C /opt/lab/curricula --strip-components=1" \
         || die "failed to deliver curricula to the instance"
 
+    # Per-seat storage, created before the hub starts so the first student to
+    # log in already has a filesystem of their own. Disk was the last resource
+    # one student could exhaust for the whole class: memory, CPU and PIDs are
+    # capped per container, but every home shared one filesystem.
+    note "preparing per-seat storage ($STUDENTS seats x ${LAB_DISK_PER_STUDENT_GIB} GiB)"
+    scp $SSH_OPTS -q "$(dirname "$0")/seat-storage.sh" "ubuntu@$IP:/tmp/seat-storage.sh"
+    ssh $SSH_OPTS "ubuntu@$IP" \
+        "sudo install -m 0755 /tmp/seat-storage.sh /opt/lab/seat-storage.sh && \
+         sudo /opt/lab/seat-storage.sh setup '$STUDENTS' '$LAB_DISK_PER_STUDENT_GIB' /srv/lab" \
+        || die "failed to prepare per-seat storage on the instance"
+
     note "delivering codes and starting the hub"
     scp $SSH_OPTS -q "$CODES_JSON" "ubuntu@$IP:/tmp/codes.json"
     # \$( ) is escaped deliberately: it evaluates on the instance, using the
@@ -525,6 +536,8 @@ CF"
         "sudo install -m 0644 /tmp/codes.json /opt/lab/hub/codes.json && \
          cd /opt/lab && sudo LAB_CURRICULUM='$CURRICULUM' LAB_MEM_LIMIT='${MEM_PER}G' \
          LAB_MAX_SERVERS='$STUDENTS' \
+         LAB_CPU_LIMIT='${LAB_CPU_LIMIT:-}' LAB_PIDS_LIMIT='${LAB_PIDS_LIMIT:-}' \
+         LAB_SEAT_HOME_DIR=/srv/lab/home \
          LAB_CURRICULA_HOST_DIR=/opt/lab/curricula \
          ANTHROPIC_API_KEY=\$(aws ssm get-parameter --name '$LAB_SSM_PARAM' \
             --with-decryption --query Parameter.Value --output text) \

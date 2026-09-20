@@ -21,8 +21,11 @@ services:
       DOCKER_NETWORK_NAME: lab-net
       LAB_STUDENT_IMAGE: lab-student:latest
       HUB_CONNECT_IP: lab-hub
-      LAB_MEM_LIMIT: "2G"
+      LAB_MEM_LIMIT: "${LAB_MEM_LIMIT:-2G}"
+      LAB_CPU_LIMIT: "${LAB_CPU_LIMIT:-}"
+      LAB_PIDS_LIMIT: "${LAB_PIDS_LIMIT:-}"
       LAB_MAX_SERVERS: "${LAB_MAX_SERVERS:-}"
+      LAB_SEAT_HOME_DIR: "${LAB_SEAT_HOME_DIR:-}"
       LAB_CURRICULUM: "${LAB_CURRICULUM:-intro-agents}"
       # Host path, not a path inside this container: the hub asks the host's
       # Docker daemon to bind-mount it into each student container. On the box

@@ -59,11 +59,43 @@ c.DockerSpawner.image = os.environ.get("LAB_STUDENT_IMAGE", "lab-student:latest"
 c.DockerSpawner.network_name = os.environ.get("DOCKER_NETWORK_NAME", "lab-net")
 c.DockerSpawner.use_internal_ip = True
 
-# Containers are disposable; the named volume is not removed with them, so a
+# Containers are disposable; the student's home is not removed with them, so a
 # container that dies mid-workshop (OOM kill, crash) comes back with the
 # student's work intact. Both die with the instance at teardown.
 c.DockerSpawner.remove = True
-c.DockerSpawner.volumes = {"lab-student-{username}": "/home/jovyan"}
+
+# Home is a per-seat filesystem, not a shared directory and not a named volume.
+#
+# Disk was the last resource a single student could exhaust for the whole class:
+# memory, CPU and PIDs are capped per container, but every named volume drew on
+# one shared filesystem with nothing stopping one `pip install` of something
+# enormous -- or one runaway log -- from filling it for all 30 seats at once.
+# Docker cannot cap a named volume: --storage-opt applies to the container's
+# writable layer, not to volumes, and only on backends most hosts do not run.
+#
+# scripts/seat-storage.sh gives each seat its own loop-mounted ext4 image, so
+# the limit is the filesystem's own size and overrun is an ordinary ENOSPC that
+# reaches exactly one student. See that script for why not project quotas.
+#
+# LAB_SEAT_HOME_DIR is a HOST path: this hub runs in a container and spawns
+# siblings through the Docker socket, so the daemon resolves it outside this
+# container's filesystem view.
+_seat_home_dir = os.environ.get("LAB_SEAT_HOME_DIR", "").strip()
+if _seat_home_dir:
+    c.DockerSpawner.volumes = {
+        _seat_home_dir.rstrip("/") + "/{username}": "/home/jovyan",
+    }
+else:
+    # Local development without seat storage prepared. Named volumes still give
+    # persistence across respawns; they give no disk containment, which is why
+    # this is the fallback and not the default.
+    print(
+        "[lab] WARNING: LAB_SEAT_HOME_DIR is not set; falling back to named "
+        "volumes. Student homes share one filesystem with NO per-seat disk "
+        "limit -- one student can fill the disk for the whole class.",
+        file=sys.stderr,
+    )
+    c.DockerSpawner.volumes = {"lab-student-{username}": "/home/jovyan"}
 
 # Course material is mounted, not baked into the image, so fixing a lesson is a
 # respawn rather than an image rebuild plus an AMI rebake.
@@ -87,10 +119,46 @@ else:
         file=sys.stderr,
     )
 
-# The cap that makes a shared box safe: one runaway agent gets OOM-killed in its
-# own cgroup instead of driving the host into memory-reclaim livelock.
+# --- Containment -------------------------------------------------------------
+#
+# One student must not be able to end the class for everyone else. Every
+# exhaustible resource a container can reach needs a ceiling, because the only
+# thing standing between a student's prompt and the host is these limits:
+# Claude Code runs with --dangerously-skip-permissions, so no confirmation
+# stops a command that turns out to be ruinous.
+#
+# Each limit below is a CEILING, not a reservation. Seats are deliberately
+# oversubscribed against the box -- 30 seats cannot all peg every ceiling at
+# once, and sizing does not assume they can. Treating a ceiling as a
+# reservation is what produced the zero-headroom sizing bug; see
+# scripts/lib-size.sh.
+
+# Memory: one runaway agent gets OOM-killed in its own cgroup instead of
+# driving the host into memory-reclaim livelock.
 _mem_limit = os.environ.get("LAB_MEM_LIMIT", "2G")
 c.DockerSpawner.mem_limit = _mem_limit
+
+# CPU: without this, one agent told to "build it faster" takes every core and
+# every other student's terminal stops responding. That failure is worse than a
+# crash, because nothing on screen says what is wrong -- the room just goes
+# slow, mid-lesson, and the instructor has no way to tell who caused it.
+#
+# dockerspawner turns this into cpu_quota = cpu_limit * cpu_period (100ms), a
+# hard CFS quota rather than a relative weight. Relative weights (cpu_shares)
+# would be useless here: when every student carries the same weight, equal
+# weights are the same as no limit at all.
+#
+# Default: a quarter of the box, so a student can still run a real build at
+# sensible speed while three quarters stays available to the other 29. Measured
+# on the reference exercise -- a 292-package npm install saturates about one
+# core, four parallel tsc runs saturate four.
+#
+# os.cpu_count() reports the HOST's CPUs from inside this container, which is
+# what we want: the ceiling should scale with the box `workshop up` chose.
+_cpu_limit = os.environ.get("LAB_CPU_LIMIT", "").strip()
+c.DockerSpawner.cpu_limit = (
+    float(_cpu_limit) if _cpu_limit else max(1.0, (os.cpu_count() or 4) / 4)
+)
 
 # A hard limit on how many students can be running at once, so the box cannot be
 # oversubscribed past what `workshop up --students N` sized it for. Normally
@@ -119,7 +187,25 @@ c.DockerSpawner.extra_create_kwargs = {"healthcheck": {"Test": ["NONE"]}}
 # runaway agent into a box-wide thrash, which is exactly the failure the mem_limit
 # exists to prevent. Without this, Docker lets a container use up to 2x its
 # memory limit in swap.
-c.DockerSpawner.extra_host_config = {"memswap_limit": _mem_limit}
+#
+# pids_limit caps the container's process count. This is the fastest way one
+# student can take the whole box down and it is not covered by any of the
+# limits above: a fork bomb exhausts the host's shared process table in
+# seconds, and what dies is dockerd and this hub, not the student who caused
+# it. Memory and CPU ceilings do not help -- thousands of tiny processes cost
+# little of either.
+#
+# Default 512 against a measured peak of 78 (four parallel tsc runs; a
+# 292-package npm install peaks at 21). That is ~6x headroom for a heavier
+# exercise while still stopping a fork bomb in milliseconds.
+# An unset variable and a variable set to "" must behave identically: compose
+# passes "${LAB_PIDS_LIMIT:-}" through as an empty string, and int("") would
+# raise here -- taking the hub down at the moment a student tries to log in.
+_pids_limit = os.environ.get("LAB_PIDS_LIMIT", "").strip() or "512"
+c.DockerSpawner.extra_host_config = {
+    "memswap_limit": _mem_limit,
+    "pids_limit": int(_pids_limit),
+}
 
 # The shared workshop key, passed through to every student container.
 _api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
