@@ -576,6 +576,31 @@ $(printf '%s\n' "$CHANGED" | sed 's/^/    /')"
     done
     ssh $SSH_OPTS "ubuntu@$IP" true 2>/dev/null || die "ssh to $IP never came up"
 
+    # Warm the disk before any student needs it. The root volume is restored
+    # from the AMI's snapshot, and EBS fetches each block from S3 the first time
+    # it is read. Measured on a fresh r7i.large: `claude --version` took 24.7s
+    # cold and 1.3s once its blocks had been read, even with the page cache
+    # dropped, and the first student waited ~50s for JupyterLab and Claude Code
+    # while the second waited ~5s. So the cost is per box, not per student, and
+    # whoever logs in first pays all of it -- in front of the room.
+    #
+    # Read every file of every image once, in parallel: ~130s cold for the
+    # ~3.4 GiB of image snapshots. That is too slow to run inline, but `up`
+    # spends about as long on curricula, seats, the hub and the certificate, so
+    # it runs in the background from here and `up` waits for it only before
+    # printing the codes. Every image file, not a list of the ones a spawn
+    # touches, so there is no list to go stale when the image changes. Both
+    # image stores: containerd (Docker 29+) and overlay2 (older AMIs).
+    note "warming the disk in the background"
+    ssh $SSH_OPTS "ubuntu@$IP" "sudo rm -f /run/lab-warm.done && sudo nohup bash -c '
+        s=\$(date +%s)
+        for d in /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots \
+                 /var/lib/docker/overlay2; do
+            [ -d \$d ] && find \$d -type f -print0 | xargs -0 -P 32 -n 256 cat >/dev/null 2>&1
+        done
+        echo \$(( \$(date +%s) - s )) > /run/lab-warm.done
+    ' </dev/null >/dev/null 2>&1 &"
+
     if [ -n "$STAGING" ]; then
         # Let's Encrypt allows only 5 duplicate certificates per week for the
         # same hostname. A debugging loop will exhaust that and lock the real
@@ -656,6 +681,15 @@ CF"
     done
     curl $PROBE "https://$DOMAIN/hub/login" -o /dev/null 2>/dev/null \
         || echo "warning: https not answering yet; check Caddy on the box" >&2
+
+    # The codes are what the trainer hands out, so the disk must be warm by now.
+    # Capped: a slow warm-up should delay the class by minutes, not hang `up`.
+    note "waiting for the disk warm-up to finish"
+    WARM="$(ssh $SSH_OPTS "ubuntu@$IP" \
+        'for _ in $(seq 1 300); do [ -f /run/lab-warm.done ] && cat /run/lab-warm.done && exit 0; sleep 1; done; exit 1' \
+        2>/dev/null)" \
+        && note "disk warm (${WARM}s); the first student will not wait on it" \
+        || echo "warning: disk warm-up unfinished after 5 more minutes; the first student may wait ~1 min" >&2
 
     stale_warning
     echo
