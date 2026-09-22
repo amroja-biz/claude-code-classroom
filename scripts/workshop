@@ -92,6 +92,38 @@ running_instance() {
         --query 'Reservations[].Instances[0].InstanceId' --output text 2>/dev/null | tr -d '\t'
 }
 
+# What `build` bakes into the AMI. Keep in step with the STAGE copy in `build`.
+BAKED=(hub student-image docker-compose.yml scripts/provision.sh)
+
+sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1
+    else shasum -a 256 | cut -d' ' -f1; fi
+}
+
+# A fingerprint of the baked sources' CONTENT, not a commit. `build` copies the
+# working tree, uncommitted edits included, so a commit id would say "same" for
+# an edit that never reached the AMI. Gitignored files (codes.json) are left out.
+baked_fingerprint() {
+    local files
+    if git rev-parse --git-dir >/dev/null 2>&1; then
+        files="$(git ls-files -co --exclude-standard -- "${BAKED[@]}")"
+    else
+        files="$(find "${BAKED[@]}" -type f ! -name codes.json ! -name .DS_Store)"
+    fi
+    printf '%s\n' "$files" | LC_ALL=C sort | while read -r f; do
+        [ -f "$f" ] || continue
+        printf '%s  %s\n' "$(sha256 < "$f")" "$f"
+    done | sha256 | cut -c1-16
+}
+
+# For people, not for comparison: which commit the AMI came from.
+baked_commit() {
+    git rev-parse --git-dir >/dev/null 2>&1 || { echo unknown; return; }
+    local c; c="$(git rev-parse --short HEAD)"
+    [ -z "$(git status --porcelain -- "${BAKED[@]}")" ] || c="$c-dirty"
+    echo "$c"
+}
+
 # Codes are read off a printed handout and typed by hand, so they are
 # word-pairs plus a number rather than random characters: easy to read aloud,
 # hard to mistype, and no case or l/1/O/0 confusion. ~15k combinations, which is
@@ -319,6 +351,7 @@ build)
     # Curricula are deliberately NOT shipped here. The AMI carries the toolchain,
     # which is slow to build and rarely changes; course material is delivered by
     # `workshop up` so a lesson edit costs a respawn, not a 20-minute rebake.
+    BAKED_FP="$(baked_fingerprint)"; BAKED_COMMIT="$(baked_commit)"
     STAGE="$(mktemp -d)"
     cp -r hub student-image docker-compose.yml "$STAGE"/
     mkdir -p "$STAGE/scripts" && cp scripts/provision.sh "$STAGE/scripts"/
@@ -342,7 +375,7 @@ build)
     note "creating AMI"
     AMI_NEW="$(aws ec2 create-image --instance-id "$BID" --name "${TAG_NAME}-${STAMP}" \
         --description "Claude Code Classroom $STAMP" \
-        --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=$TAG_NAME}]" \
+        --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=$TAG_NAME},{Key=LabSources,Value=$BAKED_FP},{Key=LabCommit,Value=$BAKED_COMMIT}]" \
         --query 'ImageId' --output text)"
 
     # From here on, DO NOT let the EXIT trap terminate the instance. `aws ec2
@@ -371,7 +404,7 @@ build)
     [ "$AMI_STATE" = "available" ] \
         || die "AMI $AMI_NEW still '$AMI_STATE' after 60 min; instance $BID left running for inspection"
 
-    note "AMI ready: $AMI_NEW"
+    note "AMI ready: $AMI_NEW (from $BAKED_COMMIT)"
     cleanup_build
 
     # Prune. Deregistering an image does NOT delete its backing snapshot, which
@@ -444,6 +477,34 @@ up)
             --query 'reverse(sort_by(Images,&CreationDate))[0].ImageId' --output text 2>/dev/null)"
     [ -n "$AMI" ] && [ "$AMI" != "None" ] \
         || die "no workshop AMI found. Run 'workshop build' first."
+
+    # A fix to hub/ or student-image/ reaches students only through `build`.
+    # a659e1d fixed a bare-terminal bug, said "requires workshop build", and the
+    # next class ran on the old AMI anyway because nothing here noticed (#5).
+    # This warns rather than refuses: the morning of a class, a 20-minute
+    # rebuild is not an option, and an old lab beats no lab.
+    read -r AMI_FP AMI_COMMIT <<<"$(aws ec2 describe-images --image-ids "$AMI" \
+        --query "Images[0].[Tags[?Key=='LabSources'].Value | [0], Tags[?Key=='LabCommit'].Value | [0]]" \
+        --output text 2>/dev/null)"
+    STALE=""
+    if [ -z "$AMI_FP" ] || [ "$AMI_FP" = "None" ]; then
+        STALE="AMI $AMI predates source tracking, so there is no telling whether it
+  has the current hub/ and student-image/ code."
+    elif [ "$AMI_FP" != "$(baked_fingerprint)" ]; then
+        STALE="AMI $AMI was built from $AMI_COMMIT, and hub/ or student-image/ has
+  changed since. Students get the code as it was then."
+        CHANGED="$(git diff --name-only "${AMI_COMMIT%-dirty}" -- "${BAKED[@]}" 2>/dev/null || true)"
+        [ -z "$CHANGED" ] || STALE="$STALE Changed since:
+$(printf '%s\n' "$CHANGED" | sed 's/^/    /')"
+    fi
+    stale_warning() {
+        [ -n "$STALE" ] || return 0
+        echo
+        echo "  WARNING: $STALE"
+        echo "  Run 'workshop build' before the next class (about 20 minutes)."
+        echo
+    }
+    stale_warning
 
     # Launching an AMI on an instance of the wrong architecture fails inside
     # run-instances with a message that does not mention architecture. Catch it
@@ -590,6 +651,7 @@ CF"
     curl $PROBE "https://$DOMAIN/hub/login" -o /dev/null 2>/dev/null \
         || echo "warning: https not answering yet; check Caddy on the box" >&2
 
+    stale_warning
     echo
     echo "  URL:  https://$DOMAIN"
     echo "  curriculum: $CURRICULUM"
