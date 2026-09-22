@@ -8,6 +8,7 @@
 #   workshop up    --students N --curriculum NAME [--staging]  prints URL + codes
 #   workshop down                                          terminate everything
 #   workshop status                                        what exists, what it costs
+#   workshop codes                                         reprint the running class's URL + codes
 #
 # There is no default cohort size. Instance type is derived from --students; see
 # scripts/lib-size.sh.
@@ -659,7 +660,25 @@ status)
     echo
     ;;
 
+codes)
+    # `up` prints the table once and deletes its local copy, so the box holds
+    # the only record. Read it back from there.
+    IID="$(running_instance)"
+    [ -n "$IID" ] || die "no running workshop instance; codes exist only while a class is up"
+    CIP="$(aws ec2 describe-instances --instance-ids "$IID" \
+           --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)"
+    CODES="$(ssh $SSH_OPTS "ubuntu@$CIP" 'cat /opt/lab/hub/codes.json')" \
+        || die "could not read codes from $CIP over ssh"
+    echo
+    echo "  URL:  https://$(stack_output DomainName)"
+    echo
+    # codes.json maps code -> seat; print seat first, in seat order, as `up` does.
+    echo "$CODES" | sed -n 's/^ *"\([^"]*\)": *"\([^"]*\)".*/\2 \1/p' | sort \
+        | while read -r seat code; do printf '  %-12s %s\n' "$seat" "$code"; done
+    echo
+    ;;
+
 help|*)
-    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac

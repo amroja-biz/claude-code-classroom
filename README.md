@@ -87,10 +87,12 @@ aws ssm put-parameter --name /claude-classroom/anthropic-api-key \
 ./scripts/workshop down                                       # after class
 ./scripts/workshop size --students 30                         # what it would cost
 ./scripts/workshop status
+./scripts/workshop codes                                      # reprint URL + codes
 ```
 
 `up` prints the URL and a code table to paste into a handout. Codes are new every
-time, so the last cohort's stop working. Instance type and disk are derived from
+time, so the last cohort's stop working. If you lose the table, `codes` reads it
+back from the running instance. Instance type and disk are derived from
 `--students`; there is no default cohort size.
 
 `down` terminates the instance and removes the A record. **Nothing is preserved**,
@@ -139,6 +141,37 @@ what you just verified.
 
 If you edit a curriculum after the rehearsal, you have changed the thing you
 tested. Re-run `up` and check it; that costs about three minutes.
+
+### If the URL works on your phone but not your laptop
+
+`down` removes the DNS record, so between classes the hostname does not exist.
+If anything on a network looks it up in that gap, for example you checking
+whether `up` has finished, the network's router can remember "does not exist" for
+up to 15 minutes after the record comes back. The lab is fine; that one network
+cannot see it yet. `up` will warn that https is not answering, and will still
+print the code table.
+
+That is also why you should **not share the URL until `up` has printed the code
+table**. One student trying it early on the venue Wi-Fi can hide the lab from the
+whole room for 15 minutes.
+
+To get past it:
+
+- **Wait.** It clears on its own within 15 minutes.
+- **Use another network**, such as a phone hotspot.
+- **Turn on secure DNS in your browser** (Chrome: *Settings → Privacy and
+  security → Security → Use secure DNS*). The browser then skips the router.
+  This is the one to leave on if your network does this often.
+- **Pin the address on your laptop**, using the IP that `up` printed:
+
+  ```bash
+  echo "<IP> training.example.com" | sudo tee -a /etc/hosts
+  ```
+
+  Remove it after class with
+  `sudo sed -i '' '/training.example.com/d' /etc/hosts`. The IP changes on every
+  `up`, so a line you forget will send your laptop to a dead address next time,
+  and the lab will look broken only to you.
 
 ## Curricula
 
