@@ -175,6 +175,27 @@ To get past it:
   `up`, so a line you forget will send your laptop to a dead address next time,
   and the lab will look broken only to you.
 
+### If the browser says the site "took too long to respond"
+
+If your phone can reach the lab and your laptop cannot, you probably have a
+leftover `/etc/hosts` line from pinning an earlier class. It still points at
+the old, terminated instance. `/etc/hosts` is checked before DNS, so flushing
+the DNS cache does not help. `up` hits the same dead address, so it also warns
+that https is not answering.
+
+Check for it:
+
+```bash
+grep training.example.com /etc/hosts
+```
+
+If that prints anything, delete the lines, then quit and reopen your browser,
+which keeps its own copy of the old address:
+
+```bash
+sudo sed -i '' '/training.example.com/d' /etc/hosts
+```
+
 ## Curricula
 
 Course material is data. A curriculum is a directory:
