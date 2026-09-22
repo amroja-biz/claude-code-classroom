@@ -1,8 +1,9 @@
 # Claude Code Classroom
 
 A disposable workshop environment for teaching people to work with AI agents.
-Students open a URL, enter a code from their handout, and land in a browser
-terminal with Claude Code already running. `down` destroys everything.
+Students open a URL, enter a code from their handout, and land in JupyterLab.
+Opening a terminal there starts Claude Code after a short welcome banner.
+`down` destroys everything.
 
 One EC2 instance, Docker and Caddy — no ALB, NAT, ECS, EKS, EFS or Cognito.
 Idle cost between workshops is about $1/month.
@@ -129,8 +130,9 @@ student can actually get a container:
 
 ```bash
 ./scripts/workshop up --students 30 --curriculum intro-agents
-# open the URL, enter the first code, confirm you land in JupyterLab
-# and that `claude` starts in the terminal
+# open the URL, enter the first code, confirm you land in JupyterLab,
+# then open a Terminal: the banner shows and Claude Code starts on its
+# own. Having to type `claude` means the AMI is stale: `workshop build`
 ./scripts/workshop down
 ```
 
