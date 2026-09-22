@@ -4,6 +4,12 @@
 # curriculum's material. Covers the wiring the unit tests can't:
 # Makefile -> compose -> hub env -> DockerSpawner.environment -> seed-home.
 #
+# Runs on per-seat bind mounts, the topology `workshop up` produces, and sets
+# them up if they are missing. The named-volume fallback is for casual local
+# work only: a named volume copies the image's home into the seat, a bind mount
+# starts empty, so a suite run on named volumes cannot see a missing dotfile.
+# That is how a659e1d shipped with every check green (#4, #5).
+#
 #   ./scripts/test-e2e.sh [curriculum] [code] [seat]
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -16,6 +22,13 @@ JAR="$(mktemp)"
 fails=0
 pass() { printf '    ok   %s\n' "$1"; }
 fail() { printf '    FAIL %s\n' "$1"; fails=$((fails + 1)); }
+
+echo "== seat storage =="
+if ! ./scripts/dev-seats.sh status 2>/dev/null | grep -q ' yes '; then
+    make dev-seats >/dev/null 2>&1 \
+        || { echo "    FAIL could not set up seat storage (make dev-seats); refusing to test on named volumes"; exit 1; }
+fi
+pass "per-seat storage mounted"
 
 echo "== bringing up hub with curriculum '$CURRICULUM' =="
 make dev-reset >/dev/null 2>&1
@@ -43,6 +56,14 @@ done
 docker ps --filter "name=jupyter-$SEAT" --format '{{.Status}}' | grep -q Up \
     && pass "container running" || fail "container never started"
 
+# Everything below is only evidence about a real seat if the home is mounted
+# the way the box mounts it.
+home_mount="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/home/jovyan"}}{{.Type}}{{end}}{{end}}' \
+    "jupyter-$SEAT" 2>/dev/null)"
+[ "$home_mount" = "bind" ] \
+    && pass "home is a bind mount, as on the box" \
+    || fail "home is a '${home_mount:-missing}' mount, not bind -- this run says nothing about a real seat"
+
 echo "== JupyterLab serving =="
 for _ in $(seq 1 25); do
     curl -sS -b "$JAR" -c "$JAR" -L --max-redirs 20 --max-time 30 \
@@ -65,6 +86,54 @@ docker exec "jupyter-$SEAT" bash -c 'claude --version' 2>/dev/null | grep -q 'Cl
     && pass "Claude Code runs" || fail "Claude Code broken (expected under QEMU on arm64)"
 docker exec "jupyter-$SEAT" bash -c '[ -n "$ANTHROPIC_API_KEY" ]' 2>/dev/null \
     && pass "API key injected" || fail "no API key"
+
+echo "== opening a terminal starts Claude Code =="
+# What a student does: click Terminal in JupyterLab. That is a POST to the
+# single-user server's terminals API, which starts the same login shell a
+# browser gets. The shell shows the banner, waits 10s for "t", then execs
+# claude -- so a running claude with the flag, and no one typing, is the proof.
+#
+# The pattern is bracketed so the grep never matches its own command line.
+count_agents() {
+    local n
+    n="$(docker exec "jupyter-$SEAT" bash -c \
+        'for f in /proc/[0-9]*/cmdline; do tr "\0" " " < "$f" 2>/dev/null; echo; done \
+         | grep -c "dangerous[l]y-skip-permissions" || true' 2>/dev/null)"
+    echo "${n:-0}"
+}
+open_terminal() {
+    curl -sS -b "$JAR" -c "$JAR" -X POST -H "X-XSRFToken: $xsrf_user" \
+        "$BASE/user/$SEAT/api/terminals" -o /dev/null -w '%{http_code}' 2>/dev/null
+}
+xsrf_user="$(awk -v p="/user/$SEAT/" '$6 == "_xsrf" && $3 == p { v = $7 } END { print v }' "$JAR")"
+if [ -z "$xsrf_user" ]; then
+    fail "no _xsrf cookie for /user/$SEAT/ -- cannot open a terminal"
+else
+    before="$(count_agents)"
+    status="$(open_terminal)"
+    [ "$status" = "200" ] && pass "terminal opened" || fail "terminals API returned $status"
+    after="$before"
+    for _ in $(seq 1 20); do
+        after="$(count_agents)"
+        [ "$after" -gt "$before" ] && break
+        sleep 2
+    done
+    [ "$after" -gt "$before" ] \
+        && pass "claude --dangerously-skip-permissions started with no one typing" \
+        || fail "terminal stayed a bare prompt: Claude Code never started (the #5 bug)"
+
+    # Floor check: take away the file the chain starts at and the same action
+    # must NOT start the agent, or the check above is not detecting anything.
+    docker exec -u jovyan "jupyter-$SEAT" rm -f /home/jovyan/.profile
+    before="$(count_agents)"
+    open_terminal >/dev/null
+    sleep 20
+    after="$(count_agents)"
+    [ "$after" -le "$before" ] \
+        && pass "floor check: with no .profile the terminal does not start Claude Code" \
+        || fail "floor check: Claude Code started without .profile -- the check above proves nothing"
+    docker exec -u jovyan "jupyter-$SEAT" cp /opt/lab/skel/.profile /home/jovyan/.profile 2>/dev/null || true
+fi
 
 rm -f "$JAR"
 echo
