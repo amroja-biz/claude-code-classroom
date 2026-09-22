@@ -642,9 +642,15 @@ CF"
 
     # Staging certificates are deliberately untrusted, so the readiness probe
     # must skip verification or it reports a working deployment as broken.
-    PROBE="-sf"; [ -n "$STAGING" ] && PROBE="-sfk"
+    #
+    # Every attempt is time-limited. Without --max-time a probe to an address
+    # that has stopped answering hangs until the OS gives up, so the 5-minute
+    # wait could run far longer. The loop is a deadline, not a count, for the
+    # same reason.
+    PROBE="-sf --connect-timeout 5 --max-time 10"; [ -n "$STAGING" ] && PROBE="$PROBE -k"
     note "waiting for https://$DOMAIN"
-    for _ in $(seq 1 60); do
+    DEADLINE=$((SECONDS + 300))
+    while [ "$SECONDS" -lt "$DEADLINE" ]; do
         curl $PROBE "https://$DOMAIN/hub/login" -o /dev/null 2>/dev/null && break
         sleep 5
     done
