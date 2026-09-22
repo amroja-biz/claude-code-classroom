@@ -84,7 +84,7 @@ aws ssm put-parameter --name /claude-classroom/anthropic-api-key \
 
 ```bash
 ./scripts/workshop build                                      # day before, ~20 min
-./scripts/workshop up --students 30 --curriculum intro-agents # ~3 min
+./scripts/workshop up --students 30 --curriculum intro-agents # ~5 min
 ./scripts/workshop down                                       # after class
 ./scripts/workshop size --students 30                         # what it would cost
 ./scripts/workshop status
@@ -142,7 +142,7 @@ nothing is fetched from the internet at `up` time — so it is a carbon copy of
 what you just verified.
 
 If you edit a curriculum after the rehearsal, you have changed the thing you
-tested. Re-run `up` and check it; that costs about three minutes.
+tested. Re-run `up` and check it; that costs about five minutes.
 
 ### If the URL works on your phone but not your laptop
 

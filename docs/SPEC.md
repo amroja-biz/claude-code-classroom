@@ -36,7 +36,8 @@ persistent user homes. Everything here is ephemeral by design.
    AMI and one hosted zone. Target: under $15/year at rest.
 3. **One box, base primitives only.** No ALB, no NAT Gateway, no ECS/EKS, no EFS,
    no Cognito, no Bedrock. EC2 + Docker + Caddy.
-4. **Bake, don't boot-install.** Spin-up launches a pre-built AMI in 2–3 minutes.
+4. **Bake, don't boot-install.** Spin-up launches a pre-built AMI and has a class
+   ready in about 5 minutes.
    Installing Node, Claude Code and Python at boot takes 8–10 minutes and has four
    upstream services that can be down on workshop morning.
 5. **The AMI is a cache, not the source of truth.** It must be reproducible from
@@ -129,7 +130,7 @@ account, no SSH key.
 
 ```
 ./workshop build                 # ~10 min, day before  — rebuild the AMI
-./workshop up --students 30      # ~3 min,  morning of  — prints URL + code table
+./workshop up --students 30      # ~5 min,  morning of  — prints URL + code table
 ./workshop down                  # ~1 min,  after       — terminate everything
 ./workshop status                # what exists right now, and what it costs
 ```
@@ -357,18 +358,23 @@ Caddy is installed and `systemctl enable`d but left stopped during the build:
 DNS does not point at the temporary instance, so an ACME attempt there would
 fail and back off. `up` restarts it once the A record is in place.
 
-### `./workshop up --students N` (~3 min)
+### `./workshop up --students N` (~5 min)
 
 1. Generate N codes; build `codes.json`.
 2. `run-instances` from the newest AMI; `wait instance-running`.
 3. Read the public IP; update the Route53 A record.
-4. Wait for SSH, then write `codes.json` and the API key to the instance. The
-   key is read from the keychain and never echoed, logged, or written to the
-   repo.
-5. Start the hub with this cohort's `LAB_CURRICULUM` and `LAB_MEM_LIMIT`, then
+4. Wait for SSH, then start reading every image file in the background. The
+   root volume is restored from a snapshot and each block is slow the first
+   time it is read (`claude --version` measured 24.7s cold, 1.3s after), so
+   without this the first student to log in pays for the whole box. About 3
+   minutes on a fresh r7i.large, overlapping the steps below.
+5. Write `codes.json` to the instance. The API key is fetched on the instance
+   from Parameter Store under its IAM role, and never crosses the ssh session.
+6. Start the hub with this cohort's `LAB_CURRICULUM` and `LAB_MEM_LIMIT`, then
    restart Caddy so it requests its certificate immediately rather than waiting
    out an ACME backoff.
-6. Wait for HTTPS to answer, then print the URL and the code table.
+7. Wait for HTTPS to answer and for the disk warm-up to finish, then print the
+   URL and the code table.
 
 `--staging` switches Caddy to the Let's Encrypt staging endpoint. Use it while
 iterating: production allows only 5 duplicate certificates per week per
@@ -472,7 +478,7 @@ destroyed, which is the primary control.
 
 | Failure | Impact | Mitigation |
 |---|---|---|
-| Instance dies mid-workshop | Whole class down | Rebuild from AMI, ~3 min. Accepted risk. |
+| Instance dies mid-workshop | Whole class down | Rebuild from AMI, ~5 min. Accepted risk. |
 | A student exhausts memory | That container OOM-killed only | `mem_limit = 2G`, and `memswap_limit = mem_limit` so it cannot swap its way into thrashing the box |
 | A student pegs every core | That container throttled only | `cpu_limit`, a hard CFS quota defaulting to a quarter of the box. Verified: held to 3.04 cores against a 3.00 ceiling while spinning on 12 |
 | A student fork-bombs | That container refused more processes | `pids_limit = 512` against a measured peak of 78. Verified: fork refused at 507 of 700, hub still serving logins |
