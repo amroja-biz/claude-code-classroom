@@ -39,32 +39,19 @@ Two questions, asked together. The second is the one people get wrong.
 
 **Where should the curriculum live?** Offer both, with the trade-off:
 
-- **Inside this repo, under `curricula/`** — simplest, works with no config
-  change. Their material is then in this git repository, which is the wrong
-  place for anything private or client-owned.
+- **Inside this repo, under `curricula/`** — then `--curriculum <name>` works
+  by bare name. Their material is then in this git repository, which is the
+  wrong place for anything private or client-owned.
 - **Anywhere else** (`~/courses/`, a private git clone, a shared drive) — keeps
-  content out of this repo. Costs one line in `workshop.conf`.
+  content out of this repo. `--curriculum` takes the path. Nothing to configure.
 
-**What is the curriculum called?** This string is three things at once: the
-directory name, the value of `--curriculum`, and what the instructor types on
-the day. Lowercase, hyphens, no spaces — `intro-to-agents`, not `Intro to
-Agents`.
+**What is the curriculum called?** The directory's basename is what the
+instance calls it and what appears in `workshop up`'s summary. Lowercase,
+hyphens, no spaces — `intro-to-agents`, not `Intro to Agents`. `up` rejects
+names with spaces.
 
-> **The trap.** `LAB_CURRICULA_DIR` points at the **parent directory that holds
-> curriculum directories**, never at one curriculum. If they are building
-> `~/courses/intro-to-agents/`, then `LAB_CURRICULA_DIR=~/courses` and
-> `--curriculum intro-to-agents`. Point it one level too deep and `workshop up`
-> still succeeds — it ships the directory, finds no match for the name, and each
-> student silently gets the alphabetically-first thing it did find. The warning
-> lands in a container log nobody is reading during class.
->
-> Say this out loud when you report the paths back. Do not assume they inferred
-> it from the config line.
-
-If they choose a location outside the repo, note that `workshop up` ships the
-**entire** `LAB_CURRICULA_DIR` tree to the instance, not just the selected
-curriculum. A directory holding three curricula is fine. Their whole `~/Documents`
-is not.
+`workshop up` ships exactly that one directory, so anything inside it — a
+`.git`, a `data/` folder, stray notebooks — goes to every student.
 
 ## Step 2 — Create the skeleton
 
@@ -214,44 +201,32 @@ name, deliberately, so a collision is silent.
 This is the step the README leaves implicit, so be concrete. Give them the
 commands with their real paths filled in, not a template.
 
-**If they built it under this repo's `curricula/`** — nothing to configure:
+**If they built it under this repo's `curricula/`** — bare name works:
 
 ```bash
 make curricula                       # their new name should be listed
 ./scripts/workshop up --students <N> --curriculum <name>
 ```
 
-**If they built it anywhere else** — one line in `workshop.conf`, pointing at
-the **parent** directory:
+**If they built it anywhere else** — pass the path:
 
 ```bash
-# in workshop.conf
-LAB_CURRICULA_DIR=/Users/<them>/courses
+./scripts/workshop up --students <N> --curriculum /Users/<them>/courses/<name>
 ```
 
-then:
-
-```bash
-make curricula CURRICULA_DIR=/Users/<them>/courses    # confirm it is found
-./scripts/workshop up --students <N> --curriculum <name>
-```
-
-Explain what happens next, because it is short and it reassures: `up` tars that
-directory, ships it to the instance, and bind-mounts it read-only into every
-student container. Editing a lesson costs a re-run of `up` — about three
-minutes — not an AMI rebuild. There is no rebuild step for content, ever.
+Explain what happens next, because it is short and it reassures: `up` checks
+the layout (it refuses, showing the expected shape, if `lessons/` is missing),
+tars that directory, ships it to the instance, and bind-mounts it read-only
+into every student container. Editing a lesson costs a re-run of `up` — about
+five minutes — not an AMI rebuild. There is no rebuild step for content, ever.
 
 ## Step 5 — Verify before it matters
 
-`--curriculum` is not validated at `up` time. A typo produces a working class
-teaching the wrong material, so check the name resolves before the day.
-
-Confirm the directory is where you both think it is, and that the name matches
-exactly:
+`up` validates the layout, but not the content. Confirm the directory is where
+you both think it is:
 
 ```bash
-ls -d <parent>/<name>            # must exist
-make curricula CURRICULA_DIR=<parent>
+ls <parent>/<name>/lessons       # must list at least one lesson
 ```
 
 If Docker is available, offer a local run — it exercises the same seeding code
@@ -260,7 +235,7 @@ home directory as a student will:
 
 ```bash
 make dev-reset                                       # forces a re-seed
-make dev-up CURRICULA_DIR=<parent> CURRICULUM=<name>
+make dev-up CURRICULUM=<parent>/<name>
 # open http://localhost:8000, log in with a code from hub/codes.json
 ./scripts/test-curriculum.sh     # seeding, cross-contamination, fallback
 make dev-down
@@ -276,7 +251,6 @@ Tell them, in this order:
 1. Where the skeleton is, as an absolute path.
 2. Which files have TODOs in them, listed — that is their work queue.
 3. The exact `workshop up` command for their class, with the name filled in.
-4. That `LAB_CURRICULA_DIR` is the parent directory, if they need it — say it
-   again here even though you said it in step 1.
+4. That the flag takes the curriculum directory itself, not a parent folder.
 
 Do not summarise the layout contract back at them. They have the files.

@@ -287,16 +287,34 @@ silently stops being real.
 ### 5.5 Curricula
 
 Material changes every cohort, so it is treated as configuration rather than a
-fixed asset. A curriculum is a directory under `curricula/`:
+fixed asset. A curriculum is a directory, anywhere on the trainer's machine:
 
-    curricula/<name>/
+    <curriculum>/
+      lessons/       (required)  -> ~/lessons
       welcome.txt    (optional)  rendered in the student's banner
       skills/        (optional)  -> ~/.claude/skills/
-      *                          -> ~/   (lessons/, CLAUDE.md, data/, ...)
+      *                          -> ~/   (CLAUDE.md, data/, ...)
 
-**Curricula are bind-mounted read-only into each student container at
-/opt/lab/curricula; `$LAB_CURRICULUM` selects one at spawn time.** `workshop up`
-delivers them to the instance; `workshop build` does not put them in the AMI.
+`workshop up --curriculum <path>` validates that layout locally and refuses
+with the expected shape if it does not match, then ships that one directory's
+contents to `/opt/lab/curriculum` on the instance. A bare name is looked up in
+this repo's `curricula/`, which holds two examples.
+
+**A class has one curriculum, and it is always at /opt/lab/curriculum -- on
+the instance and, bind-mounted read-only, inside every student container.**
+The choice is made once, on the trainer's machine; nothing on the instance or
+in the container selects among alternatives. `workshop build` does not put it
+in the AMI.
+
+> **Revised 2026-09-22.** `--curriculum` used to take a bare name looked up in
+> `$LAB_CURRICULA_DIR`, a parent directory whose entire tree was shipped to
+> `/opt/lab/curricula`, and `$LAB_CURRICULUM` picked one inside the container
+> at spawn time. A trainer who passed a path -- the obvious thing to do -- got
+> a class that started cleanly and taught the alphabetically-first example
+> instead, with the only warning in a container log. Selection was solving a
+> problem nobody had: a class teaches one thing. The env var, the name lookup
+> on the instance and the fallback are gone; the flag takes the directory, the
+> check happens before anything costs money, and the mount path is a constant.
 
 > **Revised 2026-09-19.** They *were* baked into the image. The original
 > rationale — switching cohorts is a flag, and "only authoring new material
@@ -311,13 +329,13 @@ delivers them to the instance; `workshop build` does not put them in the AMI.
 
 The mount path is resolved by the **host** Docker daemon, not by the hub's own
 filesystem — the hub is itself a container spawning siblings through the socket —
-so it is passed in as an absolute host path via `LAB_CURRICULA_HOST_DIR`. Unset,
+so it is passed in as an absolute host path via `LAB_CURRICULUM_HOST_DIR`. Unset,
 the spawn still succeeds and degrades to base files with a loud log, because a
 content problem should not become an outage.
 
-An unknown name falls back to the alphabetically-first curriculum and logs a
-warning. The fallback is deliberate: silently teaching the wrong material is
-worse than a loud degraded start, and an empty lab is worse than both.
+With nothing mounted at `/opt/lab/curriculum`, seeding logs an error and
+lays down base files only. Loud rather than fatal: a content problem should not
+become an outage, but nobody should mistake the result for a lab.
 
 Covered by `scripts/test-curriculum.sh` (seeding, cross-contamination, fallback,
 marker), `scripts/test-e2e.sh` (the full Makefile -> compose -> hub ->
@@ -370,7 +388,8 @@ fail and back off. `up` restarts it once the A record is in place.
    minutes on a fresh r7i.large, overlapping the steps below.
 5. Write `codes.json` to the instance. The API key is fetched on the instance
    from Parameter Store under its IAM role, and never crosses the ssh session.
-6. Start the hub with this cohort's `LAB_CURRICULUM` and `LAB_MEM_LIMIT`, then
+6. Start the hub with this cohort's `LAB_MEM_LIMIT`, pointing it at
+   `/opt/lab/curriculum`, then
    restart Caddy so it requests its certificate immediately rather than waiting
    out an ACME backoff.
 7. Wait for HTTPS to answer and for the disk warm-up to finish, then print the

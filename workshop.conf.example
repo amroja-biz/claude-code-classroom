@@ -71,12 +71,6 @@ LAB_SUBNET_ID=
 LAB_STACK=claude-classroom-durable
 LAB_TAG=claude-classroom
 
-# Where curricula are read from. Point this at a private directory, or a local
-# clone of a private repo, to keep course content out of this repository.
-# Contents are copied to the instance at `up` time, so there is no rebuild when
-# you edit a lesson.
-LAB_CURRICULA_DIR=./curricula
-
 # =============================================================================
 # SIZING -- you should not need to touch any of these.
 #

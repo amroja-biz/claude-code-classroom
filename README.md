@@ -84,7 +84,7 @@ aws ssm put-parameter --name /claude-classroom/anthropic-api-key \
 
 ```bash
 ./scripts/workshop build                                      # day before, ~20 min
-./scripts/workshop up --students 30 --curriculum intro-agents # ~5 min
+./scripts/workshop up --students 30 --curriculum ~/courses/my-class # ~5 min
 ./scripts/workshop down                                       # after class
 ./scripts/workshop size --students 30                         # what it would cost
 ./scripts/workshop status
@@ -211,9 +211,12 @@ Curricula are mounted into student containers, not baked into the image, and one
 is chosen at spawn time. Editing a lesson costs a re-run of `workshop up`, not an
 image rebuild and a 20-minute AMI rebake — so a typo found on the morning of a
 workshop is fixable. Students get `~/lessons` (read-only material) and `~/work`
-(their files) — a contract stated in each curriculum's `CLAUDE.md`. Point
-`LAB_CURRICULA_DIR` outside this repo to keep your content private; the two here
-are examples.
+(their files) — a contract stated in each curriculum's `CLAUDE.md`.
+
+`--curriculum` takes the path to that directory — anywhere on your machine, so
+private material never has to live in this repo — or the bare name of one of
+the examples in `curricula/`. `up` checks the layout before it spends money and
+refuses, saying what it expected, if `lessons/` is missing.
 
 ### Writing your own
 
@@ -225,13 +228,8 @@ It asks where the material should live, creates the layout with placeholder
 files, and gives you the `workshop up` command for it. It writes structure only —
 the lessons are yours to write.
 
-Two things worth knowing before you start, because neither fails loudly:
-
-- `LAB_CURRICULA_DIR` is the **parent** directory holding curriculum
-  directories, not one curriculum. Set one level too deep and `up` succeeds
-  while every student gets the wrong material.
-- `--curriculum` is not checked against what exists. A typo falls back to the
-  alphabetically-first curriculum, and says so only in a container log.
+The directory's name is what students see it called on the instance, so keep
+it lowercase with hyphens: `intro-to-agents`, not `Intro to Agents`.
 
 ## Changing this repo
 

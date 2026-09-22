@@ -23,12 +23,12 @@ seeding, Claude Code with the key injected — everything except EC2, TLS and DN
 ```bash
 make dev-build                            # build both images for this host
 make dev-seats                            # per-seat filesystems (disk limits)
-make dev-up CURRICULUM=intro-agents       # http://localhost:8000
+make dev-up CURRICULUM=./curricula/intro-agents   # http://localhost:8000
 make dev-logs                             # follow the hub
 make dev-down                             # stop, remove student containers
 make dev-reset                            # also drop student homes, forcing a re-seed
 make dev-seats-down                       # unmount and delete seat filesystems
-make curricula                            # list available curricula
+make curricula                            # list the example curricula
 ```
 
 `make dev-seats` is not optional if you are touching containment. Student homes

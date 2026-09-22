@@ -14,7 +14,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-CURRICULUM="${1:-mcp-servers}"
+CURRICULUM="${1:-./curricula/mcp-servers}"
 CODE="${2:-blue-otter-42}"
 SEAT="${3:-student01}"
 BASE=http://localhost:8000
@@ -75,8 +75,15 @@ grep -q '<title>JupyterLab</title>' /tmp/lab.html \
     && pass "JupyterLab reachable" || fail "JupyterLab never served"
 
 echo "== student got the right curriculum =="
-seeded="$(docker exec "jupyter-$SEAT" cat /home/jovyan/.lab-seeded 2>/dev/null | tr -d '[:space:]')"
-[ "$seeded" = "$CURRICULUM" ] && pass "seeded '$seeded'" || fail "seeded '$seeded', wanted '$CURRICULUM'"
+docker exec "jupyter-$SEAT" test -f /home/jovyan/.lab-seeded 2>/dev/null \
+    && pass "seed marker present" || fail "seed marker missing: seed-home never ran"
+# The lesson directories in the student's home must be exactly the ones in the
+# curriculum that was passed in; a wrong or missing mount shows up here.
+want="$(ls "$CURRICULUM/lessons" | sort | tr '\n' ' ')"
+got="$(docker exec "jupyter-$SEAT" bash -c 'ls /home/jovyan/lessons' 2>/dev/null | sort | tr '\n' ' ')"
+[ -n "$got" ] && [ "$got" = "$want" ] \
+    && pass "lessons match $CURRICULUM: $got" \
+    || fail "lessons are '$got', wanted '$want'"
 
 docker exec "jupyter-$SEAT" test -f /home/jovyan/CLAUDE.md 2>/dev/null \
     && pass "CLAUDE.md present" || fail "CLAUDE.md missing"

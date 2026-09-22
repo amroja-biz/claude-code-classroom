@@ -26,11 +26,11 @@ services:
       LAB_PIDS_LIMIT: "${LAB_PIDS_LIMIT:-}"
       LAB_MAX_SERVERS: "${LAB_MAX_SERVERS:-}"
       LAB_SEAT_HOME_DIR: "${LAB_SEAT_HOME_DIR:-}"
-      LAB_CURRICULUM: "${LAB_CURRICULUM:-intro-agents}"
-      # Host path, not a path inside this container: the hub asks the host's
-      # Docker daemon to bind-mount it into each student container. On the box
-      # `workshop up` rsyncs curricula to /opt/lab/curricula and sets this.
-      LAB_CURRICULA_HOST_DIR: "${LAB_CURRICULA_HOST_DIR:-${PWD}/curricula}"
+      # The one curriculum this class teaches. Host path, not a path inside
+      # this container: the hub asks the host's Docker daemon to bind-mount it
+      # into each student container at /opt/lab/curriculum. On the box
+      # `workshop up` unpacks it to /opt/lab/curriculum and sets this.
+      LAB_CURRICULUM_HOST_DIR: "${LAB_CURRICULUM_HOST_DIR:-${PWD}/curricula/intro-agents}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
 
 networks:

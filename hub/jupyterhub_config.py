@@ -104,17 +104,21 @@ else:
 # the daemon resolves this path on the HOST -- it is not this container's view of
 # the filesystem, and must be passed in as an absolute host path.
 # Read-only: one student editing shared material must not change it for the cohort.
-_curricula_host_dir = os.environ.get("LAB_CURRICULA_HOST_DIR", "").strip()
-if _curricula_host_dir:
-    c.DockerSpawner.volumes[_curricula_host_dir] = {
-        "bind": "/opt/lab/curricula",
+#
+# One curriculum per class, always mounted at the same place. Which one is
+# decided on the trainer's machine by `workshop up --curriculum <dir>`; the
+# container never chooses.
+_curriculum_host_dir = os.environ.get("LAB_CURRICULUM_HOST_DIR", "").strip()
+if _curriculum_host_dir:
+    c.DockerSpawner.volumes[_curriculum_host_dir] = {
+        "bind": "/opt/lab/curriculum",
         "mode": "ro",
     }
 else:
-    # Not fatal: seed-home falls back to base files and logs loudly. Failing the
-    # spawn instead would turn a content problem into an outage.
+    # Not fatal: seed-home seeds base files and logs loudly. Failing the spawn
+    # instead would turn a content problem into an outage.
     print(
-        "[lab] WARNING: LAB_CURRICULA_HOST_DIR is not set; "
+        "[lab] WARNING: LAB_CURRICULUM_HOST_DIR is not set; "
         "students will get base files only",
         file=sys.stderr,
     )
@@ -210,10 +214,6 @@ c.DockerSpawner.extra_host_config = {
 # The shared workshop key, passed through to every student container.
 _api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 _student_env = {
-    # Which curriculum seed-home copies into the student's home, selected from
-    # whatever is mounted at /opt/lab/curricula. Changing it between cohorts
-    # needs only a hub restart.
-    "LAB_CURRICULUM": os.environ.get("LAB_CURRICULUM", "").strip(),
     "DISABLE_AUTOUPDATER": "1",
     "DISABLE_TELEMETRY": "1",
     "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",

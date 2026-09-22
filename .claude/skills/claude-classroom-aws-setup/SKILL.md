@@ -120,7 +120,7 @@ Ask about (batch these into one question):
   both are thin placeholders rather than courses:
 
   ```bash
-  for c in "$LAB_CURRICULA_DIR"/*/; do
+  for c in curricula/*/; do
       echo "=== $(basename "$c")"; find "$c" -type f | sed "s|$c||"
   done
   ```
@@ -129,10 +129,10 @@ Ask about (batch these into one question):
   forward; do not substitute a different one because it is first alphabetically.
 
   If they say they will write their own, point them at the
-  `claude-classroom-new-curriculum` skill and mention that `LAB_CURRICULA_DIR`
-  can point outside the repo to keep course content private. Switching between
-  curricula later is a `down` and an `up` with a different `--curriculum`, not a
-  rebuild.
+  `claude-classroom-new-curriculum` skill and mention that `--curriculum`
+  takes a path, so course content can live anywhere and stay out of this repo.
+  Switching between curricula later is a `down` and an `up` with a different
+  `--curriculum`, not a rebuild.
 
 ## Step 3 — Write the config
 

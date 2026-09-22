@@ -33,12 +33,12 @@ RUN mkdir -p /etc/claude-code \
 # volume there at spawn time, which would shadow anything baked into that path.
 # seed-home copies it in at container start instead.
 #
-# Curricula are deliberately NOT baked in. The spawner bind-mounts them
-# read-only at /opt/lab/curricula, so editing a lesson costs a respawn rather
-# than an image rebuild and a 20-minute AMI rebake. Course material changes far
-# more often than the toolchain does, and tying the two to one artifact meant a
-# typo in lesson 3 could not be fixed on the morning of a workshop.
-# $LAB_CURRICULUM still selects among whatever is mounted, at spawn time.
+# The curriculum is deliberately NOT baked in. The spawner bind-mounts the
+# class's one curriculum read-only at /opt/lab/curriculum, so editing a lesson
+# costs a respawn rather than an image rebuild and a 20-minute AMI rebake.
+# Course material changes far more often than the toolchain does, and tying
+# the two to one artifact meant a typo in lesson 3 could not be fixed on the
+# morning of a workshop.
 COPY student-image/skel/ /opt/lab/skel/
 
 # docker-stacks SOURCES every .sh in before-notebook.d into start.sh, so the hook

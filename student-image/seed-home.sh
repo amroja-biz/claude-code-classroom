@@ -8,14 +8,16 @@
 # DockerSpawner mounts a named volume over that path at spawn time and would
 # shadow anything baked there.
 #
-# Which curriculum gets seeded is chosen at spawn time by $LAB_CURRICULUM, so one
-# image serves many cohorts and switching curricula needs no rebuild.
+# The class's one curriculum is bind-mounted at /opt/lab/curriculum. Which one
+# that is was decided on the trainer's machine (`workshop up --curriculum`), so
+# there is nothing to choose here: one image serves every cohort and switching
+# material needs no rebuild.
 set -euo pipefail
 
 HOME_DIR="${HOME:-/home/jovyan}"
 MARKER="${HOME_DIR}/.lab-seeded"
 SKEL=/opt/lab/skel
-CURRICULA=/opt/lab/curricula
+CURRICULUM=/opt/lab/curriculum
 
 log() { echo "[lab-seed] $*" >&2; }
 
@@ -24,24 +26,12 @@ if [ -f "$MARKER" ]; then
     exit 0
 fi
 
-# --- pick the curriculum -----------------------------------------------------
-want="${LAB_CURRICULUM:-}"
-if [ -z "$want" ]; then
-    log "LAB_CURRICULUM not set"
-elif [ ! -d "${CURRICULA}/${want}" ]; then
-    log "WARNING: curriculum '${want}' not found in image"
-    want=""
-fi
-
-if [ -z "$want" ]; then
-    # Deterministic fallback so a typo degrades to a working lab rather than an
-    # empty one. Loud, because silently teaching the wrong material is worse.
-    want="$(find "$CURRICULA" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort | head -1 || true)"
-    if [ -z "$want" ]; then
-        log "ERROR: no curricula baked into this image; seeding base files only"
-    else
-        log "falling back to '${want}'. Available: $(find "$CURRICULA" -mindepth 1 -maxdepth 1 -type d -printf '%f ' 2>/dev/null)"
-    fi
+# Loud rather than fatal: a content problem should not stop the container from
+# starting, but nobody should mistake a base-files-only home for a lab.
+have_curriculum=1
+if [ ! -d "$CURRICULUM" ] || [ -z "$(ls -A "$CURRICULUM" 2>/dev/null)" ]; then
+    log "ERROR: no curriculum mounted at $CURRICULUM; seeding base files only"
+    have_curriculum=0
 fi
 
 # --- base dotfiles -----------------------------------------------------------
@@ -60,8 +50,8 @@ mkdir -p "${HOME_DIR}/work"
 #   <curriculum>/skills/       -> ~/.claude/skills/
 #   <curriculum>/welcome.txt   -> ~/.lab-welcome   (rendered by .lab-bashrc)
 #   <curriculum>/*             -> ~/               (lessons/, CLAUDE.md, data/, ...)
-if [ -n "$want" ] && [ -d "${CURRICULA}/${want}" ]; then
-    src="${CURRICULA}/${want}"
+if [ "$have_curriculum" = 1 ]; then
+    src="$CURRICULUM"
 
     # NOTE: curriculum files deliberately CLOBBER the base skel (cp -r, not
     # cp -rn). Seeding runs once, guarded by the marker, so there is no student
@@ -81,7 +71,7 @@ if [ -n "$want" ] && [ -d "${CURRICULA}/${want}" ]; then
          ! -name skills ! -name welcome.txt \
          -exec cp -r {} "$HOME_DIR"/ \; 2>/dev/null || true
 
-    log "seeded curriculum '${want}'"
+    log "seeded curriculum from $src"
 fi
 
 # Hook our banner into the shell without clobbering the base image's .bashrc.
@@ -155,5 +145,7 @@ write_json(
 )
 PY
 
-printf '%s\n' "${want:-none}" > "$MARKER"
+# Records when, and whether a curriculum was present; nothing re-seeds while
+# this exists, so a student's work survives a container restart.
+printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$([ "$have_curriculum" = 1 ] && echo curriculum || echo base-only)" > "$MARKER"
 log "done"

@@ -5,7 +5,8 @@
 #   workshop init                                          deploy the durable stack
 #   workshop build                                         bake the AMI (day before)
 #   workshop size  --students N [--mem 2] [--hours 6]      what it would cost
-#   workshop up    --students N --curriculum NAME [--staging]  prints URL + codes
+#   workshop up    --students N --curriculum DIR [--staging]   prints URL + codes
+#                  (DIR is a path to a curriculum, or the name of one in ./curricula)
 #   workshop down                                          terminate everything
 #   workshop status                                        what exists, what it costs
 #   workshop codes                                         reprint the running class's URL + codes
@@ -38,7 +39,6 @@ fi
 
 STACK="${LAB_STACK:-claude-classroom-durable}"
 TAG_NAME="${LAB_TAG:-claude-classroom}"
-CURRICULA_DIR="${LAB_CURRICULA_DIR:-./curricula}"
 # workshop.conf wins over the ambient environment, not the other way round. An
 # exported AWS_PROFILE from a shell profile is common and invisible; if it could
 # override the config, every command -- including `down` -- would silently
@@ -153,6 +153,68 @@ done
 require_students() {
     [ -n "$STUDENTS" ] || die "--students is required (there is no default cohort size)"
     [[ "$STUDENTS" =~ ^[0-9]+$ ]] && [ "$STUDENTS" -gt 0 ] || die "--students must be a positive integer"
+}
+
+# --curriculum is a directory: a path to one anywhere on this machine, or the
+# bare name of one shipped in ./curricula. It is checked here, before anything
+# costs money, because the failure mode otherwise is a class that starts fine
+# and teaches the wrong material -- the seeding fallback on the instance says
+# so only in a container log nobody reads during class.
+#
+# Sets CUR_PATH (absolute) and CUR_NAME (basename, for messages). The instance
+# does not know the name: the curriculum always lands at /opt/lab/curriculum.
+CURRICULUM_LAYOUT='A curriculum is a directory laid out like this:
+
+    <curriculum>/
+      lessons/         required   one subdirectory per lesson -> ~/lessons
+      CLAUDE.md        optional   how the agent should behave in class -> ~/
+      welcome.txt      optional   shown in the student'"'"'s terminal banner
+      skills/          optional   Claude Code skills -> ~/.claude/skills
+      anything else    optional   copied to ~/ as-is (data/, notebooks, ...)
+
+The two in ./curricula are working examples. To start a new one, open this
+repo in Claude Code and ask for the claude-classroom-new-curriculum skill.'
+
+resolve_curriculum() {
+    [ -n "$CURRICULUM" ] || die "--curriculum is required: a path to a curriculum directory, or one of: $(ls -1 curricula 2>/dev/null | tr '\n' ' ')
+
+$CURRICULUM_LAYOUT"
+
+    local expanded="${CURRICULUM/#\~/$HOME}"
+    if [ -d "$expanded" ]; then
+        CUR_PATH="$(cd "$expanded" && pwd)"
+    elif [ -d "curricula/$CURRICULUM" ] && [[ "$CURRICULUM" != */* ]]; then
+        CUR_PATH="$(cd "curricula/$CURRICULUM" && pwd)"
+    else
+        die "--curriculum '$CURRICULUM' is neither a directory nor one of the bundled curricula ($(ls -1 curricula 2>/dev/null | tr '\n' ' ')).
+
+  Pass the path to your curriculum directory, e.g.
+      --curriculum ~/courses/intro-to-agents
+
+$CURRICULUM_LAYOUT"
+    fi
+    CUR_NAME="$(basename "$CUR_PATH")"
+
+    local problems=""
+    [ -d "$CUR_PATH/lessons" ] \
+        || problems+="  - no lessons/ directory\n"
+    [ -d "$CUR_PATH/lessons" ] && [ -z "$(ls -A "$CUR_PATH/lessons" 2>/dev/null)" ] \
+        && problems+="  - lessons/ is empty\n"
+    [[ "$CUR_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+        || problems+="  - directory name '$CUR_NAME' has spaces or unusual characters; it becomes a path inside every student container\n"
+    if [ -n "$problems" ]; then
+        die "$CUR_PATH does not look like a curriculum:
+$(printf '%b' "$problems")
+$CURRICULUM_LAYOUT"
+    fi
+
+    [ -f "$CUR_PATH/CLAUDE.md" ] \
+        || echo "warning: $CUR_NAME has no CLAUDE.md; the agent gets no instructions about the class" >&2
+    [ -f "$CUR_PATH/welcome.txt" ] \
+        || echo "warning: $CUR_NAME has no welcome.txt; students get the generic banner" >&2
+    [ -d "$CUR_PATH/.git" ] \
+        && echo "warning: $CUR_NAME contains a .git directory, which ships to every student" >&2
+    return 0
 }
 
 # The architecture an instance type runs. Graviton (r7g, m7g, c7g...) is arm64;
@@ -347,7 +409,8 @@ build)
     note "uploading lab sources"
     TARBALL="$(mktemp -t lab).tar.gz"
     # COPYFILE_DISABLE stops macOS tar from embedding ._* AppleDouble resource
-    # forks, which GNU tar on the box then warns about for every single file.
+    # forks, and --no-xattrs stops it recording Finder/Spotlight attributes;
+    # GNU tar on the box warns about either for every single file.
     # Curricula are deliberately NOT shipped here. The AMI carries the toolchain,
     # which is slow to build and rarely changes; course material is delivered by
     # `workshop up` so a lesson edit costs a respawn, not a 20-minute rebake.
@@ -356,7 +419,7 @@ build)
     cp -r hub student-image docker-compose.yml "$STAGE"/
     mkdir -p "$STAGE/scripts" && cp scripts/provision.sh "$STAGE/scripts"/
     rm -f "$STAGE/hub/codes.json"
-    COPYFILE_DISABLE=1 tar czf "$TARBALL" -C "$STAGE" \
+    COPYFILE_DISABLE=1 tar czf "$TARBALL" --no-xattrs -C "$STAGE" \
         hub student-image docker-compose.yml scripts
     scp $SSH_OPTS -q "$TARBALL" "ubuntu@$BIP:/tmp/lab.tar.gz"
     rm -f "$TARBALL"
@@ -429,7 +492,7 @@ build)
 
 up)
     require_students
-    [ -n "$CURRICULUM" ] || die "--curriculum is required (see: make curricula)"
+    resolve_curriculum
 
     # Parameter Store is the only supported source, deliberately. The instance
     # fetches the key under its own IAM role, so it never exists on this machine
@@ -618,22 +681,24 @@ CF"
     fi
 
     # Course material ships at `up` time, not in the AMI, so fixing a lesson is
-    # a re-run of this step rather than a rebuild. Replaced wholesale each time
-    # so a removed lesson actually disappears.
-    note "delivering curricula from $CURRICULA_DIR"
-    [ -d "$CURRICULA_DIR" ] || die "curricula directory not found: $CURRICULA_DIR"
+    # a re-run of this step rather than a rebuild. There is one curriculum per
+    # class and it always lives at /opt/lab/curriculum on the box, whatever it
+    # was called here; its contents are replaced wholesale so a removed lesson
+    # actually disappears. --no-xattrs: macOS tar otherwise records
+    # Finder/Spotlight attributes that GNU tar on the box warns about per file.
+    note "delivering curriculum '$CUR_NAME' from $CUR_PATH"
     CTAR="$(mktemp -t labcur).tar.gz"
-    COPYFILE_DISABLE=1 tar czf "$CTAR" \
-        -C "$(cd "$(dirname "$CURRICULA_DIR")" && pwd)" "$(basename "$CURRICULA_DIR")"
-    scp $SSH_OPTS -q "$CTAR" "ubuntu@$IP:/tmp/curricula.tar.gz"
+    COPYFILE_DISABLE=1 tar czf "$CTAR" --no-xattrs \
+        -C "$(dirname "$CUR_PATH")" "$CUR_NAME"
+    scp $SSH_OPTS -q "$CTAR" "ubuntu@$IP:/tmp/curriculum.tar.gz"
     rm -f "$CTAR"
     # find -delete rather than rm -r: the repo's guard rejects the latter even
     # inside a quoted remote command.
     ssh $SSH_OPTS "ubuntu@$IP" \
-        "sudo mkdir -p /opt/lab/curricula && \
-         sudo find /opt/lab/curricula -mindepth 1 -depth -delete && \
-         sudo tar xzf /tmp/curricula.tar.gz -C /opt/lab/curricula --strip-components=1" \
-        || die "failed to deliver curricula to the instance"
+        "sudo mkdir -p /opt/lab/curriculum && \
+         sudo find /opt/lab/curriculum -mindepth 1 -depth -delete && \
+         sudo tar xzf /tmp/curriculum.tar.gz -C /opt/lab/curriculum --strip-components=1" \
+        || die "failed to deliver the curriculum to the instance"
 
     # Per-seat storage, created before the hub starts so the first student to
     # log in already has a filesystem of their own. Disk was the last resource
@@ -652,11 +717,11 @@ CF"
     # instance role, so the key never crosses this ssh session.
     ssh $SSH_OPTS "ubuntu@$IP" \
         "sudo install -m 0644 /tmp/codes.json /opt/lab/hub/codes.json && \
-         cd /opt/lab && sudo LAB_CURRICULUM='$CURRICULUM' LAB_MEM_LIMIT='${MEM_PER}G' \
+         cd /opt/lab && sudo LAB_MEM_LIMIT='${MEM_PER}G' \
          LAB_MAX_SERVERS='$STUDENTS' \
          LAB_CPU_LIMIT='${LAB_CPU_LIMIT:-}' LAB_PIDS_LIMIT='${LAB_PIDS_LIMIT:-}' \
          LAB_SEAT_HOME_DIR=/srv/lab/home \
-         LAB_CURRICULA_HOST_DIR=/opt/lab/curricula \
+         LAB_CURRICULUM_HOST_DIR=/opt/lab/curriculum \
          ANTHROPIC_API_KEY=\$(aws ssm get-parameter --name '$LAB_SSM_PARAM' \
             --with-decryption --query Parameter.Value --output text) \
          docker compose up -d"
@@ -710,7 +775,7 @@ CF"
     stale_warning
     echo
     echo "  URL:  https://$DOMAIN"
-    echo "  curriculum: $CURRICULUM"
+    echo "  curriculum: $CUR_NAME  ($CUR_PATH)"
     echo
     cat "$TABLE"
     echo

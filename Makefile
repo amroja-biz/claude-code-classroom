@@ -16,10 +16,10 @@ SEATS         ?= 2
 SEAT_GIB      ?= 1
 SEAT_ROOT     ?= /var/lib/lab-seats
 
-CURRICULUM    ?= intro-agents
-# Course material is mounted into student containers, not baked into the image,
-# so this is read at run time and a lesson edit needs no rebuild.
-CURRICULA_DIR ?= ./curricula
+# The curriculum directory to teach. Mounted into student containers, not
+# baked into the image, so it is read at run time and a lesson edit needs no
+# rebuild. Any path works; this is one of the two examples in the repo.
+CURRICULUM    ?= ./curricula/intro-agents
 STUDENT_IMAGE ?= lab-student
 HUB_IMAGE     ?= lab-hub
 
@@ -49,8 +49,7 @@ dev-up: hub/codes.json ## Start the hub on http://localhost:8000
 	     echo "note: no seat storage mounted -- run 'make dev-seats' for disk limits"; \
 	 fi; \
 	 LAB_SEAT_HOME_DIR="$$SEAT_DIR" \
-	 LAB_CURRICULUM="$(CURRICULUM)" \
-	 LAB_CURRICULA_HOST_DIR="$$(cd $(CURRICULA_DIR) && pwd)" \
+	 LAB_CURRICULUM_HOST_DIR="$$(cd $(CURRICULUM) && pwd)" \
 	 ANTHROPIC_API_KEY="$${ANTHROPIC_API_KEY:-$$(command -v security >/dev/null 2>&1 && security find-generic-password -a "$$USER" -s ANTHROPIC_API_KEY -w 2>/dev/null || true)}" \
 		docker compose up -d
 	@echo "hub: http://localhost:8000   curriculum: $(CURRICULUM)   codes: hub/codes.json"
@@ -77,5 +76,5 @@ hub/codes.json:
 	@cp hub/codes.example.json $@
 	@echo "created hub/codes.json from the example (gitignored; edit freely)"
 
-curricula: ## List available curricula
-	@ls -1 $(CURRICULA_DIR) 2>/dev/null || echo "(no curricula in $(CURRICULA_DIR))"
+curricula: ## List the example curricula in this repo
+	@ls -d curricula/*/ 2>/dev/null || echo "(no curricula in ./curricula)"
