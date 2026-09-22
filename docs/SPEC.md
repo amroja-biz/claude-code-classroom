@@ -185,7 +185,8 @@ Baked into the image (not seeded at spawn time, unlike the reference repo):
   without it students hit "Detected a custom API key… use it?" and anyone who
   escapes that prompt is stranded at Claude Code's `/login` with a valid key in
   their environment.
-- `.claude/settings.json`: `skipDangerousModePermissionPrompt`, tips and survey off.
+- `.claude/settings.json`: `skipDangerousModePermissionPrompt`, tips and survey off,
+  and a status line crediting the platform.
 - A `.bashrc` that prints the welcome banner and launches Claude Code, with a
   documented key to drop to a plain shell instead.
 

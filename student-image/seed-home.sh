@@ -145,6 +145,12 @@ write_json(
         "skipDangerousModePermissionPrompt": True,
         "spinnerTipsEnabled": False,
         "feedbackSurveyRate": 0,
+        # Platform credit, bold white on emerald (#047857). A darker emerald
+        # than the classic #50C878, which white text on is hard to read.
+        "statusLine": {
+            "type": "command",
+            "command": "printf '\\033[1;38;2;255;255;255;48;2;4;120;87m Training platform made by https://amroja.com \\033[0m'",
+        },
     },
 )
 PY
