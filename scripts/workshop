@@ -679,8 +679,24 @@ CF"
         curl $PROBE "https://$DOMAIN/hub/login" -o /dev/null 2>/dev/null && break
         sleep 5
     done
-    curl $PROBE "https://$DOMAIN/hub/login" -o /dev/null 2>/dev/null \
-        || echo "warning: https not answering yet; check Caddy on the box" >&2
+    # If the name does not answer, ask the box directly by IP before blaming it.
+    # The usual culprit is not Caddy but this machine: a cached "does not exist"
+    # from the gap after the last `down`, or an /etc/hosts pin to a previous
+    # class's IP. Both look identical from here, and both leave the lab fine for
+    # everyone else, so say which it is instead of sending the operator to the
+    # box to debug a healthy server.
+    if ! curl $PROBE "https://$DOMAIN/hub/login" -o /dev/null 2>/dev/null; then
+        if curl $PROBE --resolve "$DOMAIN:443:$IP" "https://$DOMAIN/hub/login" -o /dev/null 2>/dev/null; then
+            echo "warning: the lab is up at $IP, but THIS machine cannot reach https://$DOMAIN
+  by name. The cause is on this machine or its network, not the box: check
+  /etc/hosts for an old $DOMAIN line, or wait up to 15 minutes for a cached
+  DNS failure to clear. Students on other networks are unaffected. See the
+  README, \"If the URL works on your phone but not your laptop\"." >&2
+        else
+            echo "warning: https is not answering on the box itself ($IP). Check Caddy there:
+  ssh ubuntu@$IP sudo journalctl -u caddy --no-pager -n 50" >&2
+        fi
+    fi
 
     # The codes are what the trainer hands out, so the disk must be warm by now.
     # Capped: a slow warm-up should delay the class by minutes, not hang `up`.

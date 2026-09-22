@@ -150,8 +150,8 @@ tested. Re-run `up` and check it; that costs about five minutes.
 If anything on a network looks it up in that gap, for example you checking
 whether `up` has finished, the network's router can remember "does not exist" for
 up to 15 minutes after the record comes back. The lab is fine; that one network
-cannot see it yet. `up` will warn that https is not answering, and will still
-print the code table.
+cannot see it yet. `up` will warn that the lab is up but this machine cannot
+reach it by name, and will still print the code table.
 
 That is also why you should **not share the URL until `up` has printed the code
 table**. One student trying it early on the venue Wi-Fi can hide the lab from the
@@ -180,8 +180,8 @@ To get past it:
 If your phone can reach the lab and your laptop cannot, you probably have a
 leftover `/etc/hosts` line from pinning an earlier class. It still points at
 the old, terminated instance. `/etc/hosts` is checked before DNS, so flushing
-the DNS cache does not help. `up` hits the same dead address, so it also warns
-that https is not answering.
+the DNS cache does not help. `up` hits the same dead address, so it warns that
+this machine cannot reach the lab by name.
 
 Check for it:
 
