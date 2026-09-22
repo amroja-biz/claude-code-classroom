@@ -6,10 +6,11 @@
 # should be a launch, not an install, and a workshop should not depend on apt,
 # npm, NodeSource and Docker Hub all being healthy on the morning.
 #
-#   provision.sh <domain>
+#   provision.sh <domain> <cert-bucket>
 set -euxo pipefail
 
-DOMAIN="${1:?usage: provision.sh <domain>}"
+DOMAIN="${1:?usage: provision.sh <domain> <cert-bucket>}"
+CERT_BUCKET="${2:?usage: provision.sh <domain> <cert-bucket>}"
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
@@ -78,9 +79,45 @@ ${DOMAIN} {
 }
 CADDY
 
+# The certificate outlives the box. Before Caddy starts, pull its state from
+# the durable stack's bucket; every five minutes, and at `up` and `down`, push
+# it back. See scripts/cert-sync.sh for why. The bucket name is baked in here
+# because Caddy starts at boot, before `workshop up` has talked to the box.
+install -m 0755 /opt/lab/scripts/cert-sync.sh /opt/lab/cert-sync.sh
+mkdir -p /etc/lab
+echo "$CERT_BUCKET" > /etc/lab/cert-bucket
+mkdir -p /etc/systemd/system/caddy.service.d
+# The + prefix runs the restore as root regardless of the service's User=.
+cat > /etc/systemd/system/caddy.service.d/lab-cert.conf <<'UNIT'
+[Service]
+ExecStartPre=+/opt/lab/cert-sync.sh restore
+UNIT
+cat > /etc/systemd/system/lab-cert-save.service <<'UNIT'
+[Unit]
+Description=Save Caddy's TLS state to the workshop certificate bucket
+
+[Service]
+Type=oneshot
+ExecStart=/opt/lab/cert-sync.sh save
+UNIT
+cat > /etc/systemd/system/lab-cert-save.timer <<'UNIT'
+[Unit]
+Description=Save Caddy's TLS state every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl daemon-reload
+systemctl enable lab-cert-save.timer
+
 # Caddy is enabled but NOT started here: during the build, DNS does not point at
 # this temporary instance, so an ACME attempt would fail and back off. It starts
-# on the next boot, and `workshop up` restarts it once the A record is in place.
+# on the next boot -- restoring the saved certificate first -- and `workshop up`
+# restarts it once the A record is in place.
 systemctl enable caddy
 systemctl stop caddy || true
 

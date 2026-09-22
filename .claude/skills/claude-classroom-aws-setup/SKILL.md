@@ -153,8 +153,10 @@ Show the user the finished file before proceeding.
 ./scripts/workshop init
 ```
 
-This reads `workshop.conf` and deploys security group, IAM role, key pair and
-DNS. It costs about $0.50/month and persists between workshops.
+This reads `workshop.conf` and deploys security group, IAM role, key pair,
+DNS, and a private S3 bucket that keeps the TLS certificate between workshops.
+It costs about $0.50/month and persists between workshops. Re-running it on an
+existing install updates the stack in place.
 
 **If it printed nameservers**, the stack created a zone and delegation is
 required. The user must add those four as an `NS` record for the hostname in the

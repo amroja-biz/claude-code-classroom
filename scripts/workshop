@@ -93,7 +93,7 @@ running_instance() {
 }
 
 # What `build` bakes into the AMI. Keep in step with the STAGE copy in `build`.
-BAKED=(hub student-image docker-compose.yml scripts/provision.sh)
+BAKED=(hub student-image docker-compose.yml scripts/provision.sh scripts/cert-sync.sh)
 
 sha256() {
     if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1
@@ -358,7 +358,9 @@ build)
     DOMAIN="$(stack_output DomainName)"
     SG="$(stack_output SecurityGroupId)"
     KEY="$(stack_output KeyPairName)"
+    CERT_BUCKET="$(stack_output CertBucket)"
     [ -n "$DOMAIN" ] || die "durable stack '$STACK' not found; deploy infra/durable.yaml first"
+    [ -n "$CERT_BUCKET" ] || die "durable stack '$STACK' has no certificate bucket; run 'workshop init' to update it, then build again"
 
     # The AMI's architecture is whatever the build instance is, because
     # provision.sh builds the images natively on that box. Resolve the matching
@@ -417,7 +419,7 @@ build)
     BAKED_FP="$(baked_fingerprint)"; BAKED_COMMIT="$(baked_commit)"
     STAGE="$(mktemp -d)"
     cp -r hub student-image docker-compose.yml "$STAGE"/
-    mkdir -p "$STAGE/scripts" && cp scripts/provision.sh "$STAGE/scripts"/
+    mkdir -p "$STAGE/scripts" && cp scripts/provision.sh scripts/cert-sync.sh "$STAGE/scripts"/
     rm -f "$STAGE/hub/codes.json"
     COPYFILE_DISABLE=1 tar czf "$TARBALL" --no-xattrs -C "$STAGE" \
         hub student-image docker-compose.yml scripts
@@ -428,7 +430,7 @@ build)
     note "provisioning (docker, caddy, image builds) -- several minutes"
     ssh $SSH_OPTS "ubuntu@$BIP" \
         "sudo mkdir -p /opt/lab && sudo tar xzf /tmp/lab.tar.gz -C /opt/lab && \
-         sudo bash /opt/lab/scripts/provision.sh '$DOMAIN' 2>&1 | tail -40"
+         sudo bash /opt/lab/scripts/provision.sh '$DOMAIN' '$CERT_BUCKET' 2>&1 | tail -40"
 
     note "stopping instance for a clean image"
     aws ec2 stop-instances --instance-ids "$BID" >/dev/null
@@ -586,7 +588,11 @@ $(printf '%s\n' "$CHANGED" | sed 's/^/    /')"
     PROFILE_NAME="$(stack_output InstanceProfileName)"
     KEY="$(stack_output KeyPairName)"
     [ -n "$DOMAIN" ] || die "durable stack '$STACK' not found; deploy infra/durable.yaml first"
-
+    # Older stacks work, but every up then requests a new certificate, and
+    # Let's Encrypt stops issuing after five in a week.
+    [ -n "$(stack_output CertBucket)" ] || echo "warning: durable stack '$STACK' predates the certificate bucket; the
+  certificate will not be kept between workshops. Run 'workshop init' to
+  update the stack, then 'workshop build'." >&2
 
     note "generating $STUDENTS codes"
     CODES_JSON="$(mktemp)"; TABLE="$(mktemp)"
@@ -726,9 +732,20 @@ CF"
             --with-decryption --query Parameter.Value --output text) \
          docker compose up -d"
 
-    # Restart Caddy now that the A record points here, so it requests the
-    # certificate immediately instead of waiting out its ACME backoff.
+    # Restart Caddy now that the A record points here. Its ExecStartPre pulls
+    # the saved certificate from the durable stack's bucket first, so on every
+    # run but the first there is nothing to request; otherwise it requests one
+    # immediately instead of waiting out its ACME backoff.
     ssh $SSH_OPTS "ubuntu@$IP" "sudo systemctl restart caddy"
+    ISSUER=acme-v02.api.letsencrypt.org-directory
+    [ -n "$STAGING" ] && ISSUER=acme-staging-v02.api.letsencrypt.org-directory
+    if ssh $SSH_OPTS "ubuntu@$IP" \
+        "sudo test -f /var/lib/caddy/.local/share/caddy/certificates/$ISSUER/$DOMAIN/$DOMAIN.crt" \
+        2>/dev/null; then
+        note "reusing the saved certificate for $DOMAIN"
+    else
+        note "no saved certificate for $DOMAIN; requesting one from Let's Encrypt"
+    fi
 
     # Staging certificates are deliberately untrusted, so the readiness probe
     # must skip verification or it reports a working deployment as broken.
@@ -750,13 +767,30 @@ CF"
     # class's IP. Both look identical from here, and both leave the lab fine for
     # everyone else, so say which it is instead of sending the operator to the
     # box to debug a healthy server.
-    if ! curl $PROBE "https://$DOMAIN/hub/login" -o /dev/null 2>/dev/null; then
+    if curl $PROBE "https://$DOMAIN/hub/login" -o /dev/null 2>/dev/null; then
+        # A certificate was just issued or renewed; keep it before anything
+        # else can happen to this box. The timer would get it within five
+        # minutes, but a `down` inside that window would lose it.
+        ssh $SSH_OPTS "ubuntu@$IP" "sudo /opt/lab/cert-sync.sh save" >/dev/null 2>&1 || true
+    else
         if curl $PROBE --resolve "$DOMAIN:443:$IP" "https://$DOMAIN/hub/login" -o /dev/null 2>/dev/null; then
             echo "warning: the lab is up at $IP, but THIS machine cannot reach https://$DOMAIN
   by name. The cause is on this machine or its network, not the box: check
   /etc/hosts for an old $DOMAIN line, or wait up to 15 minutes for a cached
   DNS failure to clear. Students on other networks are unaffected. See the
   README, \"If the URL works on your phone but not your laptop\"." >&2
+        elif RL="$(ssh $SSH_OPTS "ubuntu@$IP" "sudo journalctl -u caddy --no-pager -n 200 2>/dev/null" \
+                  | grep -o 'rateLimited[^"]*' | tail -1)" && [ -n "$RL" ]; then
+            # The one Caddy failure that no amount of waiting fixes today.
+            echo "warning: Let's Encrypt refused to issue a certificate for $DOMAIN:
+  $RL
+
+  That limit is global and has no override. The lab is otherwise up; browsers
+  cannot connect until Caddy gets a certificate, which it will retry on its
+  own after the time above. To run a class before then: 'workshop down', then
+  'workshop up ... --staging' (browsers will warn about the certificate).
+  From now on the certificate is kept between workshops, so this should not
+  happen again." >&2
         else
             echo "warning: https is not answering on the box itself ($IP). Check Caddy there:
   ssh ubuntu@$IP sudo journalctl -u caddy --no-pager -n 50" >&2
@@ -787,7 +821,17 @@ down)
     if [ -z "$IID" ]; then
         note "no running workshop instance"
     else
-        note "terminating $IID (root volume is DeleteOnTermination; nothing is preserved)"
+        # The certificate is the one thing worth keeping. The timer on the box
+        # has probably saved it already; this catches a renewal in the last
+        # five minutes. Best-effort: an unreachable box must not block down.
+        IP="$(aws ec2 describe-instances --instance-ids "$IID" \
+              --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null)"
+        if [ -n "$IP" ] && [ "$IP" != "None" ]; then
+            ssh $SSH_OPTS "ubuntu@$IP" "sudo test -x /opt/lab/cert-sync.sh && sudo /opt/lab/cert-sync.sh save" \
+                >/dev/null 2>&1 && note "certificate saved" \
+                || echo "warning: could not save the certificate from $IP; the next up may request a new one" >&2
+        fi
+        note "terminating $IID (root volume is DeleteOnTermination; student work is not preserved)"
         aws ec2 terminate-instances --instance-ids "$IID" >/dev/null
     fi
 

@@ -278,11 +278,30 @@ silently stops being real.
   touched again.
 - `./workshop up` updates the A record to the new public IP. No EIP is held
   between workshops.
-- **Development must use the Let's Encrypt staging endpoint**
-  (`acme_ca https://acme-staging-v02.api.letsencrypt.org/directory`). Iterating on
-  `up` against a fixed hostname will otherwise hit LE's 5-duplicate-certificates-
-  per-week limit and lock out the real cert mid-debug. A few real workshops a year
-  is nowhere near any limit.
+- **The certificate outlives the instance.** Caddy's data directory --
+  certificate, key, ACME account -- is synced to a private, versioned S3
+  bucket in the durable stack (`CertBucket`). On the box, a systemd drop-in
+  restores it before Caddy starts (`ExecStartPre=+/opt/lab/cert-sync.sh
+  restore`), a timer saves it every five minutes, and `up` and `down` each
+  save once more. The instance role can list, get and put in that bucket,
+  and nothing else; the bucket is retained on stack delete because
+  CloudFormation cannot remove a non-empty one.
+- Let's Encrypt renews on its own schedule (Caddy asks at roughly two thirds
+  of the 90-day lifetime, or when ARI says so). A renewal during a class is
+  saved by the timer. A certificate that expired between classes is simply
+  requested again, once.
+- `--staging` still exists for platform development, and its certificates
+  are kept in the same bucket under a separate issuer directory, so the two
+  never collide.
+
+> **Revised 2026-09-22.** The rule used to be "development must use staging",
+> with the real certificate requested fresh at every `up`. Let's Encrypt's
+> limit of 5 new certificates per exact hostname per week is global, hard, and
+> has no override -- verified against their rate-limits page that day -- and a
+> teacher rehearsing, fixing a lesson and rehearsing again hit it with a class
+> the next morning. A rule that says "remember to pass a flag" is not
+> automation. Keeping the certificate makes every issuance after the first a
+> renewal, which the limit does not count.
 
 ### 5.5 Curricula
 
@@ -395,11 +414,14 @@ fail and back off. `up` restarts it once the A record is in place.
 7. Wait for HTTPS to answer and for the disk warm-up to finish, then print the
    URL and the code table.
 
-`--staging` switches Caddy to the Let's Encrypt staging endpoint. Use it while
-iterating: production allows only 5 duplicate certificates per week per
-hostname, and a debugging loop will exhaust that.
+`--staging` switches Caddy to the Let's Encrypt staging endpoint. Only
+needed when iterating on the certificate path itself: the certificate is kept
+between workshops (§5.4), so ordinary `up`/`down` cycles no longer count
+against Let's Encrypt's limit.
 
 ### `./workshop down` (~1 min)
+
+Saves Caddy's certificate to the durable bucket first, best-effort, then:
 
 1. `terminate-instances`. The root volume is `DeleteOnTermination`, so it goes too.
 2. Remove the Route53 A record.

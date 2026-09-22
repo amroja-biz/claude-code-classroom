@@ -140,6 +140,20 @@ Resources:
                     StringEquals:
                       kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
           - !Ref AWS::NoValue
+        # Read and write Caddy's state in the certificate bucket. No delete:
+        # the box only ever adds or overwrites, so a bad sync cannot empty it.
+        - PolicyName: tls-certificate-store
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt CertBucket.Arn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${CertBucket.Arn}/*"
         - PolicyName: route53-self-update
           PolicyDocument:
             Version: "2012-10-17"
@@ -149,6 +163,41 @@ Resources:
                 Resource: !Sub
                   - "arn:aws:route53:::hostedzone/${ZoneId}"
                   - ZoneId: !If [CreateZone, !Ref HostedZone, !Ref ExistingHostedZoneId]
+
+  # The TLS certificate outlives the instance. Every `down` destroys the box,
+  # and Let's Encrypt allows only 5 new certificates per hostname per week --
+  # a hard, global limit with no override -- so a week of iterating on `up`
+  # locks the real certificate out for days. Caddy's state (certificate, key,
+  # ACME account) is synced here from the box and restored before Caddy starts,
+  # so a certificate is issued once and thereafter renewed, which Let's Encrypt
+  # does not count.
+  #
+  # Retained on stack delete: CloudFormation cannot delete a non-empty bucket,
+  # and a failed delete leaves the whole stack behind. `aws s3 rb --force`
+  # removes it when the platform is gone for good.
+  CertBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      # A sync that copies a half-written file is recoverable.
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: claude-classroom
 
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -185,3 +234,8 @@ Outputs:
     Value: !Ref KeyPair
     Export:
       Name: claude-classroom-keypair
+  CertBucket:
+    Description: Where Caddy's TLS certificate is kept between workshops.
+    Value: !Ref CertBucket
+    Export:
+      Name: claude-classroom-cert-bucket

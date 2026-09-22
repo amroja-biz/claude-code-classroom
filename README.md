@@ -61,8 +61,9 @@ precedence over an `AWS_PROFILE` exported in your shell, so the account a
 command acts on is the one written in the config — every command that changes
 anything prints the profile and account id before it starts.
 
-`init` deploys the durable resources — security group, IAM role, key pair, DNS —
-about $0.50/month. Set `LAB_HOSTED_ZONE_ID` to a Route53 zone you already own in
+`init` deploys the durable resources — security group, IAM role, key pair, DNS,
+and a private bucket that keeps the TLS certificate between workshops — about
+$0.50/month. Set `LAB_HOSTED_ZONE_ID` to a Route53 zone you already own in
 this account and the stack writes records into it. Leave it empty and the stack
 creates a zone for the subdomain instead, printing nameservers to delegate from
 the parent — the path to use when the parent domain lives in a different AWS
@@ -96,8 +97,18 @@ time, so the last cohort's stop working. If you lose the table, `codes` reads it
 back from the running instance. Instance type and disk are derived from
 `--students`; there is no default cohort size.
 
-`down` terminates the instance and removes the A record. **Nothing is preserved**,
-including student work.
+`down` terminates the instance and removes the A record. **Student work is not
+preserved.** The TLS certificate is: `down` saves it to the durable stack's
+bucket and the next `up` restores it, so Let's Encrypt issues one certificate
+per hostname and renews it, rather than issuing a new one every workshop. That
+matters because Let's Encrypt allows only 5 new certificates per hostname per
+week, and refuses — with no override — once you cross it.
+
+### Upgrading an existing install
+
+If you deployed before the certificate bucket existed, re-run `init` (it
+updates the stack in place) and then `build` (the AMI carries the sync). `up`
+tells you when the durable stack or the AMI is behind.
 
 ### One student cannot end the class
 
