@@ -1,12 +1,11 @@
 # Claude Code Classroom
 
-A disposable workshop environment for teaching people to work with AI agents.
+A disposable workshop environment for teaching Claude Code.
 Students open a URL, enter a code from their handout, and land in JupyterLab.
 Opening a terminal there starts Claude Code after a short welcome banner.
-`down` destroys everything.
-
-One EC2 instance, Docker and Caddy — no ALB, NAT, ECS, EKS, EFS or Cognito.
-Idle cost between workshops is about $1/month.
+Class exercises are baked into each student's container and a single Anthropic API
+key stored in a secure location on your AWS account means that there is no setup.
+Students login and are ready to rol.
 
 ---
 
@@ -26,62 +25,61 @@ However, Claude costs could be in the hundreds of dollars. A comparable publishe
 
 ---
 
+## Requirements
+
+In order to deploy a Claude Code class environment you must have admin access to an AWS account 
+and an Anthropic API key. 
+
 ## Setup
 
-Open this repo in Claude Code (or any coding agent that reads
-`.claude/skills/`) and ask it:
+1. Clone this repo
+2. Open Claude Code and type, 
 
 > Use the `claude-classroom-aws-setup` skill in this repo to configure a class
 
-It inspects your AWS account, offers choices instead of asking for resource IDs,
-asks only what it cannot infer, writes the config, deploys the stack, walks you
-through DNS delegation if needed, and verifies each step. The API key is handled
-so that it never passes through the agent.
+The skill instructs Claude to inspect your AWS account, make suggestions, ask what it cannot infer, 
+write the config, deploy the stack, walk you through DNS delegation if needed, 
+and verifies each step. 
 
-<details>
-<summary><b>Manual setup, if you would rather not</b></summary>
-
-Needs an AWS account with a VPC and public subnet, a domain you can point at it,
-`aws` CLI v2, and an Anthropic API key. Docker is not required — the images are
-built on the EC2 instance, not on your machine.
-
-```bash
-cp workshop.conf.example workshop.conf && $EDITOR workshop.conf
-./scripts/workshop init
-```
-
-`workshop.conf` is gitignored and holds everything account-specific. Four
-settings are required — `LAB_DOMAIN`, `LAB_VPC_ID`, `LAB_SSH_PUBLIC_KEY` and
-`LAB_SSM_PARAM` — and the rest have working defaults. `./scripts/workshop
-discover` prints what your account offers, which is what you need to fill it in.
-
-If you have more than one AWS profile, set `LAB_AWS_PROFILE`. Every AWS call
-uses that one profile, and `default` is rarely the account you mean. It takes
-precedence over an `AWS_PROFILE` exported in your shell, so the account a
-command acts on is the one written in the config — every command that changes
-anything prints the profile and account id before it starts.
-
-`init` deploys the durable resources — security group, IAM role, key pair, DNS,
-and a private bucket that keeps the TLS certificate between workshops — about
-$0.50/month. Set `LAB_HOSTED_ZONE_ID` to a Route53 zone you already own in
-this account and the stack writes records into it. Leave it empty and the stack
-creates a zone for the subdomain instead, printing nameservers to delegate from
-the parent — the path to use when the parent domain lives in a different AWS
-account.
-
-`LAB_SSM_PARAM` must be set before `init`, because the stack grants the instance
-role read access to exactly that parameter name. The key itself can be stored
-afterwards, any time before your first `up` — the instance fetches it under its
-own IAM role, and there is no other supported source:
+The Anthropic API key is placed in AWS Parameter Store via a manual CLI command,
 
 ```bash
 aws ssm put-parameter --name /claude-classroom/anthropic-api-key \
   --type SecureString --value 'sk-ant-...'
 ```
 
-</details>
+This ensures that Claude never sees the API key. Though students will be able to see it in their
+terminals during class sessions.
 
-## Run a workshop
+## Overview
+
+The setup skill will take care of all AWS configuration but if you're interested in looking under the hood, 
+here's some more information. 
+
+The platform adds a few resources to your AWS environment, but these are minimal.
+AWS costs are near zero when classes aren't running.
+
+The platform creates a single EC2 instance for each class, with student isolation handled via containers. 
+This simple architecture allows the platform to scale to reasonably large class sizes of a few dozen 
+students while maintaining a very simple design. 
+
+Jupyter Hub is used so that the students get browser-based access to the Claude Code terminal while being able to 
+see lesson files and work output in an intuitive UI. 
+
+Class configuration is written to a file called `workshop.conf`. 
+
+Instructors create classes by using the workshop CLI script that comes with this repo. 
+
+
+## Preparing a workshop
+
+Classes need exercises so there's a skill in this repo to create the folder structure 
+supported by the platform. Once created, add whatever lessons you want. 
+Lessons get copied directly onto the instance that's used by the students for the class. 
+This means that once the lessons are installed, they're not very easy to change. 
+If you find an error in your lesson, you should shut down the instance and start a new one with the curriculum. 
+
+## Running a workshop
 
 ```bash
 ./scripts/workshop build                                      # day before, ~20 min
@@ -104,17 +102,10 @@ per hostname and renews it, rather than issuing a new one every workshop. That
 matters because Let's Encrypt allows only 5 new certificates per hostname per
 week, and refuses — with no override — once you cross it.
 
-### Upgrading an existing install
-
-If you deployed before the certificate bucket existed, re-run `init` (it
-updates the stack in place) and then `build` (the AMI carries the sync). `up`
-tells you when the durable stack or the AMI is behind.
-
 ### One student cannot end the class
 
 Every seat runs with a ceiling on each resource it could otherwise exhaust for
-everyone else. You do not configure any of this; it is why `size` picks the box
-it picks.
+everyone else. 
 
 | If a student… | What happens |
 |---|---|
@@ -123,21 +114,15 @@ it picks.
 | fork-bombs the machine | their container is refused more processes; the hub keeps serving |
 | fills the disk | only their own seat fills; everyone else keeps working |
 
-`size` shows the reasoning behind the instance it chose, including what would
-happen if every seat used its full memory allowance at once.
-
 If your course material is heavier than the default assumption — large models,
 big datasets, long-running builds — raise the per-seat allowance with
 `--mem <GiB>` and `size` will pick a correspondingly larger box.
 
 ## Rehearse the night before
 
-Run `build` the day *before* the class — Claude Code ships often, and a broken
-upstream should surface with a day of slack rather than thirty minutes before
-students arrive.
+Run `./scripts/workshop up` the day *before* the class to ensure it works.
 
-Then do a full dress rehearsal, because it is the only thing that proves a
-student can actually get a container:
+Then do a full dress rehearsal:
 
 ```bash
 ./scripts/workshop up --students 30 --curriculum intro-agents
@@ -152,10 +137,7 @@ teach on. In the morning, `up` again: same AMI, same images, same curricula, and
 nothing is fetched from the internet at `up` time — so it is a carbon copy of
 what you just verified.
 
-If you edit a curriculum after the rehearsal, you have changed the thing you
-tested. Re-run `up` and check it; that costs about five minutes.
-
-### If the URL works on your phone but not your laptop
+### If the URL stops working in your browser (instructors)
 
 `down` removes the DNS record, so between classes the hostname does not exist.
 If anything on a network looks it up in that gap, for example you checking
@@ -172,9 +154,6 @@ To get past it:
 
 - **Wait.** It clears on its own within 15 minutes.
 - **Use another network**, such as a phone hotspot.
-- **Turn on secure DNS in your browser** (Chrome: *Settings → Privacy and
-  security → Security → Use secure DNS*). The browser then skips the router.
-  This is the one to leave on if your network does this often.
 - **Pin the address on your laptop**, using the IP that `up` printed:
 
   ```bash
@@ -218,18 +197,15 @@ Course material is data. A curriculum is a directory:
 └── everything else             copied to ~/  (lessons/, CLAUDE.md, ...)
 ```
 
-Curricula are mounted into student containers, not baked into the image, and one
-is chosen at spawn time. Editing a lesson costs a re-run of `workshop up`, not an
-image rebuild and a 20-minute AMI rebake — so a typo found on the morning of a
-workshop is fixable. Students get `~/lessons` (read-only material) and `~/work`
-(their files) — a contract stated in each curriculum's `CLAUDE.md`.
+Curricula are mounted into student containers. Editing a lesson requires a re-run of `workshop up`, 
+so a typo found on the morning of a workshop is fixable. 
+Students see `~/lessons` (read-only material) and `~/work`
+(their files) with their respective purposes specified in each curriculum's `CLAUDE.md`.
 
-`--curriculum` takes the path to that directory — anywhere on your machine, so
-private material never has to live in this repo — or the bare name of one of
-the examples in `curricula/`. `up` checks the layout before it spends money and
-refuses, saying what it expected, if `lessons/` is missing.
+`--curriculum` takes the path to a directory  anywhere on your machine. 
+`up` checks the layout before launching a server so errors are found early.
 
-### Writing your own
+### Writing your own curriculum
 
 Open this repo in Claude Code and ask it:
 
