@@ -95,6 +95,23 @@ time, so the last cohort's stop working. If you lose the table, `codes` reads it
 back from the running instance. Instance type and disk are derived from
 `--students`; there is no default cohort size.
 
+### Keep it current
+
+Pull before every class, then let the two slow commands run:
+
+```bash
+git pull
+./scripts/workshop init      # updates the CloudFormation stack; ~1 min, no downtime
+./scripts/workshop build     # rebuilds the AMI; ~20 min
+./scripts/workshop up ...
+```
+
+`init` and `build` are safe to run when nothing has changed, so there is no
+need to work out whether they are needed. The order matters: `build` bakes
+values from the stack into the AMI, so the stack must be updated first. `up`
+warns when the AMI or the stack is behind the code, but by then it is too
+late to fix it before that class.
+
 `down` terminates the instance and removes the A record. **Student work is not
 preserved.** The TLS certificate is: `down` saves it to the durable stack's
 bucket and the next `up` restores it, so Let's Encrypt issues one certificate
@@ -125,7 +142,7 @@ Run `./scripts/workshop up` the day *before* the class to ensure it works.
 Then do a full dress rehearsal:
 
 ```bash
-./scripts/workshop up --students 30 --curriculum intro-agents
+./scripts/workshop up --students 30 --curriculum ./curricula/intro-agents
 # open the URL, enter the first code, confirm you land in JupyterLab,
 # then open a Terminal: the banner shows and Claude Code starts on its
 # own. Having to type `claude` means the AMI is stale: `workshop build`
@@ -185,6 +202,50 @@ which keeps its own copy of the old address:
 ```bash
 sudo sed -i '' '/training.example.com/d' /etc/hosts
 ```
+
+## Networking
+
+Everything the platform does on the network, in one place.
+
+**DNS.** The durable stack owns a Route53 hosted zone for the class domain,
+either one you already have in the account or one it creates, which you then
+delegate from your parent domain once with an NS record. Nothing else is ever
+touched in that zone. `up` writes a single A record for the class hostname
+pointing at the new instance's public IP, with a 60-second TTL. `down` deletes
+it. No Elastic IP is held between classes, so the IP changes every time and
+the hostname does not resolve while no class is running.
+
+**Ports.** The security group opens 80 and 443 to the world by default
+(students need them) and 22 for the instructor. Both ranges are stack
+parameters, `WebCidr` and `SshCidr`, and 22 is worth tightening to your own
+address. Nothing else is reachable from outside.
+
+**Reverse proxy.** Caddy runs on the instance and forwards 80 and 443 to
+JupyterHub on localhost. Plain http redirects to https. Its whole
+configuration is the hostname and that one forward.
+
+**Certificates.** Caddy requests a certificate from Let's Encrypt on first
+start using the HTTP-01 challenge, which is why port 80 must be open to
+everyone, not just students. Because Let's Encrypt allows only five new
+certificates per hostname per week with no override, the certificate, key and
+account are copied to a private, versioned S3 bucket in the durable stack:
+restored before Caddy starts, saved every five minutes, and saved again at
+`up` and `down`. Every class after the first reuses the same certificate and
+Let's Encrypt renews it on its own schedule, which does not count against the
+limit. `up --staging` uses Let's Encrypt's staging service instead, which has
+no meaningful limit but issues certificates browsers do not trust; use it only
+to test the platform itself, never for a class.
+
+**Third parties.** The platform itself depends on three outside services:
+Let's Encrypt for certificates, the Anthropic API for Claude Code, and AWS (S3
+for the certificate, Parameter Store for the API key). Everything else it
+needs is baked into the AMI at `build` time, so `up` fetches nothing from the
+internet. Outbound traffic is not filtered, so students' Claude Code sessions
+can reach whatever the lessons ask them to.
+
+**Inside the box.** Student containers sit on a private Docker network with no
+published ports. JupyterHub reaches each one by container name, and the only
+way in from outside is through Caddy and the hub's login page.
 
 ## Curricula
 
